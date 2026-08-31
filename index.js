@@ -39,6 +39,7 @@ const AdminCmdConfig = mongoose.model('AdminCmdConfig', new mongoose.Schema({
 
 const KickConfig = mongoose.model('KickConfig', new mongoose.Schema({
     guildId: String,
+    categoryNotifications: { type: Boolean, default: false },
     streamers: [{
         kickUsername: String,
         channelId: String,
@@ -70,6 +71,18 @@ const UserLevel = mongoose.model('UserLevel', new mongoose.Schema({
     level: { type: Number, default: 1 },
     msgCount: { type: Number, default: 0 }
 }));
+
+const LevelBackup = mongoose.model('LevelBackup', new mongoose.Schema({
+    guildId: { type: String, required: true, index: true },
+    resetBy: { type: String, required: true },
+    resetAt: { type: Date, default: Date.now },
+    levels: [{
+        userId: { type: String, required: true },
+        xp: { type: Number, default: 0 },
+        level: { type: Number, default: 1 },
+        msgCount: { type: Number, default: 0 }
+    }]
+}, { timestamps: false }));
 
 const ModConfig = mongoose.model('ModConfig', new mongoose.Schema({
     guildId: String,
@@ -201,6 +214,17 @@ const MemberHistory = mongoose.model('MemberHistory', new mongoose.Schema({
     roleName: String,
     executorId: String,
     createdAt: { type: Date, default: Date.now, index: true }
+}, { timestamps: false }));
+
+const InviteRecord = mongoose.model('InviteRecord', new mongoose.Schema({
+    guildId: { type: String, required: true, index: true },
+    inviterId: { type: String, required: true, index: true },
+    invitedUserId: { type: String, required: true, index: true },
+    inviteCode: { type: String, required: true },
+    joinedAt: { type: Date, default: Date.now },
+    leftAt: { type: Date, default: null },
+    currentlyInGuild: { type: Boolean, default: true },
+    createdAt: { type: Date, default: Date.now }
 }, { timestamps: false }));
 
 const Suggestion = mongoose.model('Suggestion', new mongoose.Schema({
@@ -583,7 +607,7 @@ passport.use(new Strategy({
 }, (accessToken, refreshToken, profile, done) => done(null, profile)));
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'VORTEX -secret-key-2026',
+    secret: process.env.SESSION_SECRET || 'بوت خاص -secret-key-2026',
     resave: false,
     saveUninitialized: false
 }));
@@ -596,12 +620,6 @@ const checkAuth = (req, res, next) => {
     res.redirect('/login');
 };
 
-const checkDashboardOwner = (req, res, next) => {
-    const ownerId = String(process.env.DASHBOARD_OWNER_ID || '').trim();
-    if (!ownerId) return res.status(500).send('DASHBOARD_OWNER_ID غير مضبوط في متغيرات البيئة.');
-    if (String(req.user?.id || '') !== ownerId) return res.status(403).send('هذا الحساب غير مخول لدخول لوحة التحكم.');
-    next();
-};
 
 const checkBotGuildAccess = (req, res, next) => {
     if (!client.guilds.cache.has(req.params.guildId)) return res.status(404).send('البوت غير موجود في هذا السيرفر.');
@@ -619,11 +637,11 @@ const checkGuildAccess = (req, res, next) => {
     next();
 };
 
-// The dashboard owner may view and configure every guild where the bot is present.
-// Discord permissions are still checked separately before each bot action.
-app.use('/manage/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/save/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/delete-kick/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
+// Any authenticated Discord user may access the dashboard.
+// The bot must still be present in the selected guild.
+app.use('/manage/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/save/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess);
 
 app.get('/auth/discord', passport.authenticate('discord'));
 app.get('/callback', passport.authenticate('discord', { failureRedirect: '/login' }), (req, res) => {
@@ -639,7 +657,7 @@ app.get('/login', (req, res) => {
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VORTEX · الدخول</title>
+<title>بوت خاص · الدخول</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#0b0a08;--panel:#17130e;--panel-2:#211a12;--gold:#f4c24c;--gold-2:#a86e13;--red:#dd5147;--text:#f6f0e5;--muted:#a19889;--line:rgba(244,194,76,.18)}
@@ -648,7 +666,7 @@ body{margin:0;min-height:100vh;background:var(--ink);color:var(--text);font-fami
 @media(max-width:760px){body{overflow:auto;display:block;padding:18px 0}.login-shell{width:calc(100% - 28px);min-height:0;display:flex;flex-direction:column}.brand-panel{padding:34px 25px 30px;min-height:300px}.brand-panel h1{font-size:58px;letter-spacing:6px}.brand-panel p{font-size:12px;margin-top:14px}.brand-panel:after{font-size:220px;bottom:-22%}.login-panel{padding:32px 25px 36px}.login-panel h2{font-size:26px}.corner-mark{margin-top:35px}}
 </style>
 </head>
-<body><main class="login-shell"><section class="brand-panel"><div><div class="micro">VORTEX / CONTROL CENTER</div><h1>VORTEX</h1><p>مركز تحكم واحد لإدارة سيرفراتك، حماية مجتمعك، ومتابعة كل الأنظمة من واجهة مرتبة وسريعة.</p><div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div></div><div class="corner-mark">SYSTEM ONLINE · BUILD 2.0</div></section><section class="login-panel"><div class="panel-kicker">AUTHENTICATION REQUIRED</div><h2>أهلًا بك في مركز التحكم</h2><p>سجّل الدخول بحساب Discord المصرّح له للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p><a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a><div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div></section></main></body></html>`);
+<body><main class="login-shell"><section class="brand-panel"><div><div class="micro">بوت خاص / PRIVATE CONTROL CENTER</div><h1>بوت خاص</h1><p>مركز تحكم واحد لإدارة سيرفراتك، حماية مجتمعك، ومتابعة كل الأنظمة من واجهة مرتبة وسريعة.</p><div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div></div><div class="corner-mark">SYSTEM ONLINE · BUILD 2.0</div></section><section class="login-panel"><div class="panel-kicker">AUTHENTICATION REQUIRED</div><h2>أهلًا بك في مركز التحكم</h2><p>سجّل الدخول بحساب Discord المصرّح له للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p><a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a><div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div></section></main></body></html>`);
 });
 
 app.get('/ping', (req, res) => res.send('I am alive!'));
@@ -678,27 +696,27 @@ function ui(guild, active, content) {
         ['mod', 'الإشراف', `/manage/${guildId}/mod`, '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'],
         ['massban', 'تبنيد الأشخاص', `/manage/${guildId}/massban`, '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6z"/><path d="M8 12h8"/>'],
         ['channelswipe', 'حذف جميع الرومات', `/manage/${guildId}/channelswipe`, '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>'],
-        ['poetry', 'الشعر العراقي', `/manage/${guildId}/poetry`, '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>']
     ] : [];
     const navHtml = nav.map(([key, label, href, path]) => `<a class="rail-link ${active === key ? 'is-active' : ''}" href="${href}" aria-current="${active === key ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${path}</svg><span>${label}</span><i></i></a>`).join('');
     return `<!doctype html>
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${safe(guildName)} · VORTEX</title>
+<title>${safe(guildName)} · بوت خاص</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#0c0b09;--panel:#15120e;--panel-2:#1b1711;--panel-3:#231d15;--line:rgba(244,194,76,.15);--line-strong:rgba(244,194,76,.34);--gold:#f4c24c;--gold-2:#b57b19;--red:#e14d43;--red-soft:rgba(225,77,67,.14);--muted:#918a7c;--text:#f5f0e6;--shadow:0 22px 70px rgba(0,0,0,.28);--rail:272px}
 *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--gold-2) #0f0d0a}*::-webkit-scrollbar{width:9px;height:9px}*::-webkit-scrollbar-track{background:#0f0d0a;border-radius:12px}*::-webkit-scrollbar-thumb{background:linear-gradient(180deg,var(--gold),var(--gold-2));border:2px solid #0f0d0a;border-radius:12px}*::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg,#ffe08a,var(--gold))}*::-webkit-scrollbar-button{display:none;width:0;height:0}html{background:var(--ink);overflow-x:hidden}body{margin:0;background:radial-gradient(circle at 15% 8%,rgba(244,194,76,.06),transparent 28%),radial-gradient(circle at 90% 80%,rgba(225,77,67,.05),transparent 24%),var(--ink);color:var(--text);font-family:'Cairo',sans-serif;min-height:100vh}body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.22;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#000,transparent 88%)}a{color:inherit}.app{min-height:100vh}.rail{position:fixed;z-index:20;inset:0 0 0 auto;width:var(--rail);padding:24px 16px 18px;background:linear-gradient(180deg,rgba(24,19,13,.98),rgba(12,11,9,.98));border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-16px 0 50px rgba(0,0,0,.16)}.brand{display:flex;align-items:center;gap:11px;padding:4px 9px 23px;border-bottom:1px solid var(--line)}.brand-mark{width:40px;height:40px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,var(--gold),var(--gold-2));color:#161007;font-size:18px;font-weight:900;box-shadow:0 10px 25px rgba(244,194,76,.18)}.brand strong{display:block;font-size:19px;letter-spacing:2px;line-height:1}.brand small{display:block;color:var(--muted);font-size:9px;letter-spacing:2px;margin-top:5px;font-family:'IBM Plex Mono',monospace}.rail-section{color:#756d61;font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1px;margin:25px 10px 9px;text-transform:uppercase}.rail-nav{display:flex;flex-direction:column;gap:4px;overflow:auto;padding:2px 3px 10px 2px;scrollbar-width:thin;scrollbar-color:var(--gold-2) transparent}.rail-nav::-webkit-scrollbar{width:6px}.rail-nav::-webkit-scrollbar-track{background:transparent}.rail-nav::-webkit-scrollbar-thumb{border:0;background:linear-gradient(180deg,var(--gold),var(--gold-2))}.rail-nav::-webkit-scrollbar-button{display:none}.rail-link{min-height:43px;display:flex;align-items:center;gap:12px;padding:9px 11px;border:1px solid transparent;border-radius:12px;text-decoration:none;color:#a59c8d;font-size:12px;font-weight:600;transition:.2s ease}.rail-link svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}.rail-link i{width:5px;height:5px;border-radius:50%;margin-right:auto;background:transparent}.rail-link:hover{background:rgba(244,194,76,.07);color:var(--text);transform:translateX(-3px)}.rail-link.is-active{background:linear-gradient(90deg,rgba(244,194,76,.16),rgba(244,194,76,.045));border-color:var(--line);color:var(--gold);box-shadow:inset -3px 0 var(--gold)}.rail-link.is-active i{background:var(--gold);box-shadow:0 0 12px var(--gold)}.rail-footer{margin-top:auto;padding:15px 10px 0;border-top:1px solid var(--line);color:var(--muted);font-size:10px}.rail-footer a{color:var(--red);text-decoration:none;float:left}.workspace{margin-right:var(--rail);min-width:0}.topbar{height:78px;padding:0 42px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);background:rgba(12,11,9,.72);backdrop-filter:blur(18px);position:sticky;top:0;z-index:10}.menu-btn{display:none;border:1px solid var(--line);background:var(--panel);color:var(--gold);border-radius:11px;width:42px;height:42px;font-size:20px}.crumb{color:var(--muted);font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.5px}.crumb b{display:block;color:var(--text);font:700 18px 'Cairo',sans-serif;margin-top:2px}.top-status{margin-right:auto;display:flex;align-items:center;gap:8px;color:#b4ad9f;font-size:11px}.status-dot{width:7px;height:7px;border-radius:50%;background:#48c774;box-shadow:0 0 12px #48c774}.top-actions{display:flex;gap:8px}.top-actions a{display:grid;place-items:center;width:38px;height:38px;border:1px solid var(--line);border-radius:10px;color:var(--muted);text-decoration:none;background:rgba(255,255,255,.015)}.top-actions a:hover{color:var(--gold);border-color:var(--line-strong)}.content{padding:38px 42px 60px;max-width:1500px;margin:auto}.welcome-strip{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:30px;padding:31px 34px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(110deg,rgba(244,194,76,.11),rgba(23,18,12,.88) 45%),var(--panel);box-shadow:var(--shadow);position:relative;overflow:hidden}.welcome-strip:after{content:'V';position:absolute;left:27px;top:-42px;color:rgba(244,194,76,.055);font:900 180px 'IBM Plex Mono',monospace}.eyebrow{color:var(--gold);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;text-transform:uppercase}.welcome-strip h1{margin:8px 0 3px;font-size:29px;letter-spacing:-.5px}.welcome-strip p{margin:0;color:var(--muted);font-size:12px}.welcome-meta{position:relative;z-index:1;text-align:left;color:var(--muted);font:500 10px 'IBM Plex Mono',monospace}.view{min-width:0}.card{background:linear-gradient(145deg,rgba(35,29,21,.88),rgba(18,15,11,.92));border:1px solid var(--line);border-radius:18px;padding:25px;margin-bottom:20px;box-shadow:0 12px 40px rgba(0,0,0,.14)}.card:hover{border-color:var(--line-strong)}.card h3{display:flex;align-items:center;gap:10px;margin:0 0 20px;font-size:16px;color:var(--text)}.card h3 svg{width:19px;color:var(--gold)}label{display:block;color:#b6ad9d;font-size:12px;margin:15px 0 7px}input,select,textarea{width:100%;padding:12px 14px;color:var(--text);background:#0f0d0a;border:1px solid rgba(255,255,255,.09);border-radius:10px;outline:0;font:500 13px 'Cairo',sans-serif;transition:.2s}input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(244,194,76,.1)}textarea{min-height:105px;resize:vertical}.btn-save{border:0;border-radius:10px;padding:12px 21px;background:linear-gradient(135deg,var(--gold),var(--gold-2));color:#171006;font:800 12px 'Cairo',sans-serif;cursor:pointer;box-shadow:0 8px 20px rgba(244,194,76,.12);transition:.2s}.btn-save:hover{transform:translateY(-2px);filter:brightness(1.08)}.btn-danger{background:var(--red)!important;color:#fff!important}.tag{display:inline-flex;align-items:center;border-radius:20px;padding:4px 9px;font-size:10px}.tag-blue{background:rgba(244,194,76,.12);color:var(--gold);border:1px solid var(--line)}.tag-red{background:var(--red-soft);color:#f0837b;border:1px solid rgba(225,77,67,.2)}.data-table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid var(--line);border-radius:13px;font-size:12px}.data-table th{background:rgba(244,194,76,.07);color:var(--gold);font-size:10px;text-align:right;padding:13px}.data-table td{padding:13px;border-top:1px solid rgba(255,255,255,.055);color:#c8c0b2}.data-table-wrap{overflow:auto}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-box{padding:20px;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.018)}.stat-num{color:var(--gold);font:800 28px 'IBM Plex Mono',monospace}.stat-label{color:var(--muted);font-size:11px;margin-top:5px}.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.guild-card{padding:21px;border:1px solid var(--line);border-radius:17px;background:var(--panel);transition:.2s}.guild-card:hover{transform:translateY(-4px);border-color:var(--gold)}.guild-icon{width:48px;height:48px;border-radius:14px;object-fit:cover;margin-bottom:14px}.guild-card h3{margin:0 0 12px;font-size:15px}.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.06)}.toggle-row input[type=checkbox]{width:19px;height:19px;accent-color:var(--gold)}.drawer-backdrop{display:none}
 @media(max-width:950px){:root{--rail:245px}.content{padding:28px 24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.rail{transform:translateX(110%);transition:transform .25s ease;width:min(300px,88vw);box-shadow:-25px 0 80px rgba(0,0,0,.5)}.rail.is-open{transform:translateX(0)}.workspace{margin-right:0}.menu-btn{display:block}.topbar{height:67px;padding:0 15px}.top-status,.top-actions a:first-child{display:none}.crumb b{font-size:15px}.content{padding:18px 13px 35px}.welcome-strip{display:block;padding:22px 20px}.welcome-strip h1{font-size:23px}.welcome-meta{text-align:right;margin-top:16px}.stats-grid{grid-template-columns:1fr 1fr;gap:9px}.stat-box{padding:15px}.stat-num{font-size:21px}.card{padding:18px 14px;border-radius:14px}.drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:15}.drawer-backdrop.is-open{display:block}}
+.category-alert-panel{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px;border:1px solid rgba(103,232,249,.25);border-radius:20px;background:linear-gradient(135deg,rgba(124,58,237,.17),rgba(6,182,212,.08));margin-bottom:22px}.category-alert-panel h4{margin:5px 0;font-size:16px}.category-alert-panel p{margin:0;color:var(--muted);font-size:12px;line-height:1.8}.category-toggle-form{margin:0}.category-switch{display:flex;align-items:center;gap:10px;cursor:pointer;white-space:nowrap;margin:0}.category-switch input{display:none}.category-switch span{width:54px;height:30px;border-radius:30px;background:#334155;position:relative;transition:.2s}.category-switch span:after{content:'';position:absolute;width:22px;height:22px;top:4px;right:4px;border-radius:50%;background:#fff;transition:.2s}.category-switch input:checked+span{background:linear-gradient(90deg,#7c3aed,#06b6d4)}.category-switch input:checked+span:after{right:28px}.category-switch b{font-size:11px;color:#cbd5e1}@media(max-width:700px){.category-alert-panel{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
 <div class="app">
-<aside class="rail" id="rail"><div class="brand"><div class="brand-mark">V</div><div><strong>VORTEX</strong><small>CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
+<aside class="rail" id="rail"><div class="brand"><div class="brand-mark">ب</div><div><strong>بوت خاص</strong><small>PRIVATE CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
 <div class="drawer-backdrop" id="backdrop"></div>
-<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>VORTEX / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات">⌂</a><a href="/logout" title="تسجيل الخروج">↪</a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
+<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>بوت خاص / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات">⌂</a><a href="/logout" title="تسجيل الخروج">↪</a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
 </div>
 <script>
 (() => { const rail=document.getElementById('rail'), backdrop=document.getElementById('backdrop'), btn=document.getElementById('menuBtn'); if(!rail||!backdrop||!btn)return; const close=()=>{rail.classList.remove('is-open');backdrop.classList.remove('is-open')}; btn.addEventListener('click',()=>{rail.classList.toggle('is-open');backdrop.classList.toggle('is-open')}); backdrop.addEventListener('click',close); window.addEventListener('keydown',e=>{if(e.key==='Escape')close()}); })();
@@ -784,7 +802,7 @@ app.post('/save/:guildId/admincmds', checkAuth, async (req, res) => {
 // ==========================================
 
 // --- [ Dashboard - Server List ] ---
-app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
+app.get('/dashboard', checkAuth, (req, res) => {
     const botGuilds = [...client.guilds.cache.values()];
     const cards = botGuilds.map(g => {
         const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
@@ -796,7 +814,7 @@ app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
         <div style="font-size:48px; font-weight:800; letter-spacing:6px;
             background: linear-gradient(135deg, var(--gold), #fff, var(--red));
             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-            margin-bottom:10px;">VORTEX </div>
+            margin-bottom:10px;">بوت خاص </div>
         <p style="color:var(--text-muted); font-size:15px;">اختر السيرفر لإدارته</p>
         <div style="margin-top:20px; max-width:400px; margin-left:auto; margin-right:auto;">
             <input type="text" id="guildSearch" placeholder="ابحث عن سيرفر..." onkeyup="filterGuilds()" style="text-align:center; border-radius:20px; background:rgba(212,175,55,0.05); border:1px solid var(--gold-border);">
@@ -825,6 +843,53 @@ app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
 });
 
 // --- [ Home / Stats ] ---
+const inviteCache = new Map();
+
+async function fetchGuildInvites(guild) {
+    try {
+        const invites = await guild.invites.fetch();
+        const snapshot = new Map();
+        for (const invite of invites.values()) snapshot.set(invite.code, {
+            uses: invite.uses || 0,
+            inviterId: invite.inviter?.id || null,
+            inviterTag: invite.inviter?.tag || invite.inviter?.username || null
+        });
+        inviteCache.set(guild.id, snapshot);
+        return snapshot;
+    } catch (error) {
+        console.error(`[Invite Fetch Error] ${guild.id}:`, error.message);
+        return inviteCache.get(guild.id) || new Map();
+    }
+}
+
+async function attributeMemberInvite(member) {
+    const guild = member.guild;
+    const previous = inviteCache.get(guild.id) || new Map();
+    const current = await fetchGuildInvites(guild);
+    let usedInvite = null;
+    for (const [code, invite] of current) {
+        const before = previous.get(code);
+        if (invite.uses > (before?.uses || 0)) {
+            usedInvite = { code, ...invite };
+            break;
+        }
+    }
+    if (!usedInvite?.inviterId || usedInvite.inviterId === member.id) return null;
+    await InviteRecord.findOneAndUpdate(
+        { guildId: guild.id, invitedUserId: member.id },
+        { $set: { inviterId: usedInvite.inviterId, inviteCode: usedInvite.code, joinedAt: new Date(), leftAt: null, currentlyInGuild: true } },
+        { upsert: true, setDefaultsOnInsert: true }
+    );
+    return usedInvite;
+}
+
+async function markInviteMemberPresent(guildId, userId, present) {
+    await InviteRecord.updateOne(
+        { guildId, invitedUserId: userId },
+        { $set: { currentlyInGuild: present, ...(present ? { leftAt: null } : { leftAt: new Date() }) } }
+    ).catch(() => {});
+}
+
 async function createGuildInvite(guild) {
     const botMember = guild.members.me || await guild.members.fetch(client.user.id).catch(() => null);
     if (!botMember) return null;
@@ -837,7 +902,7 @@ async function createGuildInvite(guild) {
             maxAge: 0,
             maxUses: 0,
             unique: false,
-            reason: 'إنشاء رابط دخول من لوحة تحكم VORTEX'
+            reason: 'إنشاء رابط دخول من لوحة تحكم بوت خاص'
         }).catch(() => null);
         if (invite) return { url: invite.url, channelName: channel.name };
     }
@@ -931,7 +996,9 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
 
         <div style="background:rgba(0,0,0,0.3); border:1px solid var(--gold-border); border-radius:14px; padding:24px; margin-bottom:24px;">
             <h4 style="color:var(--gold); margin-bottom:18px; font-size:15px;">اضافة ستريمر جديد</h4>
-            <form method="POST" action="/save/${g.id}/kick">
+            <div class="category-alert-panel"><div><span class="eyebrow">إعدادات التنبيهات</span><h4>تنبيهات تغيّر الكاتيجوري</h4><p>عند تفعيلها، يرسل البوت تنبيهًا إذا تغيّر تصنيف بث الستريمر أثناء البث.</p></div><form method="POST" action="/save/${g.id}/kick-settings" class="category-toggle-form"><input type="hidden" name="categoryNotifications" value="0"><label class="category-switch"><input type="checkbox" name="categoryNotifications" value="1" ${s.categoryNotifications ? 'checked' : ''} onchange="this.form.submit()"><span></span><b>${s.categoryNotifications ? 'مفعّلة' : 'متوقفة'}</b></label></form></div>
+
+<form method="POST" action="/save/${g.id}/kick">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
                     <div>
                         <label>اسم المستخدم في Kick</label>
@@ -974,6 +1041,16 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
     </div>`;
 
     res.send(ui(g, 'kick', content));
+});
+
+app.post('/save/:guildId/kick-settings', checkAuth, async (req, res) => {
+    const { guildId } = req.params;
+    await KickConfig.findOneAndUpdate(
+        { guildId },
+        { $set: { guildId, categoryNotifications: req.body.categoryNotifications === '1' } },
+        { upsert: true }
+    );
+    res.redirect(`/manage/${guildId}/kick`);
 });
 
 app.post('/save/:guildId/kick', checkAuth, async (req, res) => {
@@ -1159,7 +1236,7 @@ app.get('/manage/:guildId/welcome', checkAuth, async (req, res) => {
     res.send(ui(g, 'welcome', content));
 });
 
-app.post('/generate/:guildId/welcome-random', checkAuth, checkDashboardOwner, checkBotGuildAccess, async (req, res) => {
+app.post('/generate/:guildId/welcome-random', checkAuth, checkBotGuildAccess, async (req, res) => {
     try {
         const filename = `welcome-generated-${req.params.guildId}-${Date.now()}-${Math.floor(Math.random() * 100000)}.png`;
         const absolutePath = path.join(__dirname, 'uploads', filename);
@@ -1789,69 +1866,6 @@ app.post('/save/:guildId/mod', checkAuth, async (req, res) => {
     res.redirect(`/manage/${req.params.guildId}/mod`);
 });
 
-// --- [ Iraqi Poetry ] ---
-app.get('/manage/:guildId/poetry', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    let s = await PoetryConfig.findOne({ guildId: g.id }) || {};
-    const totalPoems = await Poem.countDocuments();
-
-    const content = `
-    <form method="POST" action="/save/${g.id}/poetry">
-        <div class="card">
-            <h3>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-                نظام الشعر العراقي
-            </h3>
-            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
-                يقوم البوت بإرسال بيت شعر عراقي (باللهجة العراقية) بشكل دوري في الروم المحدد، بدون تكرار حتى تنتهي كل الأبيات المخزنة (يوجد حالياً <b style="color:var(--gold);">${totalPoems}</b> بيت في قاعدة البيانات).
-            </p>
-            <div class="toggle-row">
-                <label style="color:white; margin:0;">تفعيل نظام الشعر</label>
-                <input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''} style="width:20px; height:20px; accent-color:var(--gold); cursor:pointer;">
-            </div>
-            <label>روم إرسال الشعر</label>
-            <select name="channelId" required>
-                <option value="">-- اختر القناة --</option>
-                ${g.channels.cache.filter(c => c.type === 0).map(c =>
-                    `<option value="${c.id}" ${s.channelId === c.id ? 'selected' : ''}># ${c.name}</option>`
-                ).join('')}
-            </select>
-            <label>كل كم دقيقة يرسل بيت شعر جديد</label>
-            <input type="number" name="intervalMinutes" min="1" max="1440" value="${s.intervalMinutes || 2}" placeholder="2">
-            <label>رتبة يتم منشنها عند إرسال الشعر (اختياري)</label>
-            <select name="roleId">
-                <option value="">-- بدون منشن --</option>
-                ${g.roles.cache.filter(r => r.name !== '@everyone').map(r =>
-                    `<option value="${r.id}" ${s.roleId === r.id ? 'selected' : ''}>${r.name}</option>`
-                ).join('')}
-            </select>
-            <button class="btn-save" style="margin-top:20px;">حفظ إعدادات الشعر</button>
-        </div>
-    </form>`;
-
-    res.send(ui(g, 'poetry', content));
-});
-
-app.post('/save/:guildId/poetry', checkAuth, async (req, res) => {
-    const { guildId } = req.params;
-    const b = req.body;
-    const intervalMinutes = Math.min(1440, Math.max(1, parseInt(b.intervalMinutes) || 2));
-    await PoetryConfig.findOneAndUpdate(
-        { guildId },
-        { $set: {
-            enabled: b.enabled === 'on',
-            channelId: b.channelId || '',
-            intervalMinutes,
-            roleId: b.roleId || ''
-        }},
-        { upsert: true }
-    );
-    res.redirect(`/manage/${guildId}/poetry`);
-});
-
-
-
 // --- [ Dashboard - Bulk Moderation ] ---
 function parseExcludedIds(value) {
     return new Set(String(value || '').split(/[\s,؛،]+/).map(x => x.trim()).filter(x => /^\d{15,22}$/.test(x)));
@@ -1980,7 +1994,7 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
                     .setAuthor({ name: `اقتراح من ${msg.author.username}`, iconURL: authorAvatar })
                     .setDescription(content || '*بدون نص*')
                     .setColor(0xd4af37)
-                    .setFooter({ text: 'VORTEX  - Suggestions' })
+                    .setFooter({ text: 'بوت خاص  - Suggestions' })
                     .setTimestamp()
                     .addFields(
                         { name: getEmojiDisplay(msg.guild, sugCfg.emoji1), value: '0', inline: true },
@@ -2580,6 +2594,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 });
 client.on('guildMemberAdd', async (member) => {
     try {
+        const usedInvite = await attributeMemberInvite(member).catch(() => null);
         // إحصائيات
         await Stats.findOneAndUpdate(
             { guildId: member.guild.id },
@@ -2593,7 +2608,8 @@ client.on('guildMemberAdd', async (member) => {
             { name: 'العضو', value: logUser(member), inline: true },
             { name: 'معرّف العضو', value: member.id, inline: true },
             { name: 'إنشاء الحساب', value: accountCreated, inline: true },
-            { name: 'عدد أعضاء السيرفر', value: String(member.guild.memberCount), inline: true }
+{ name: 'عدد أعضاء السيرفر', value: String(member.guild.memberCount), inline: true },
+            ...(usedInvite ? [{ name: 'الدعوة المستخدمة', value: `\`${usedInvite.code}\` بواسطة <@${usedInvite.inviterId}>`, inline: true }] : [])
         ] });
         await sendLog(member.guild, 'members', logEmbed);
 
@@ -2614,7 +2630,7 @@ client.on('guildMemberAdd', async (member) => {
             .setDescription(welcomeMsg)
             .setColor(0xd4af37)
             .setTimestamp()
-            .setFooter({ text: `VORTEX  - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
+            .setFooter({ text: `بوت خاص  - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
 
         try {
             const canvas = createCanvas(800, 400);
@@ -2660,6 +2676,7 @@ const background = await loadImage(bgUrl ).catch(() => loadImage('https://placeh
 });
 
 client.on('guildMemberRemove', async (member) => {
+    await markInviteMemberPresent(member.guild.id, member.id, false);
     const kick = await findRecentExecutor(member.guild, AuditLogEvent.MemberKick, member.id);
     const embed = buildLogEmbed({ title: kick ? 'طرد عضو' : 'خروج عضو', color: LOG_COLORS.danger, guild: member.guild, actor: kick, target: member, thumbnail: member.user?.displayAvatarURL?.(), fields: [
         { name: 'العضو', value: logUser(member), inline: true },
@@ -2825,6 +2842,103 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.editReply({ embeds: [embed], components: [historyButtons(user.id, null, 0)] });
             }
         
+            if (interaction.commandName === 'resetlevels') {
+                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+                    return interaction.reply({ content: 'هذا الأمر مخصص للإدارة العليا فقط.', ephemeral: true });
+                }
+                await interaction.deferReply({ ephemeral: true });
+                const existingLevels = await UserLevel.find({ guildId: interaction.guild.id }).lean();
+                if (!existingLevels.length) {
+                    return interaction.editReply({ content: 'لا توجد بيانات مستويات حتى يتم تصفيرها.' });
+                }
+                await LevelBackup.findOneAndUpdate(
+                    { guildId: interaction.guild.id },
+                    {
+                        $set: {
+                            resetBy: interaction.user.id,
+                            resetAt: new Date(),
+                            levels: existingLevels.map(row => ({
+                                userId: row.userId,
+                                xp: row.xp || 0,
+                                level: row.level || 1,
+                                msgCount: row.msgCount || 0
+                            }))
+                        }
+                    },
+                    { upsert: true, setDefaultsOnInsert: true }
+                );
+                await UserLevel.deleteMany({ guildId: interaction.guild.id });
+                const embed = new EmbedBuilder()
+                    .setTitle('تم تصفير المستويات')
+                    .setDescription(`تم تصفير مستويات **${existingLevels.length}** عضو، وحُفظت نسخة احتياطية يمكن استرجاعها بواسطة \`/restorelevels\`.`)
+                    .setColor(0xe67e22)
+                    .setFooter({ text: `بواسطة ${interaction.user.tag}` })
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
+            }
+
+            if (interaction.commandName === 'restorelevels') {
+                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+                    return interaction.reply({ content: 'هذا الأمر مخصص للإدارة العليا فقط.', ephemeral: true });
+                }
+                await interaction.deferReply({ ephemeral: true });
+                const backup = await LevelBackup.findOne({ guildId: interaction.guild.id }).lean();
+                if (!backup?.levels?.length) {
+                    return interaction.editReply({ content: 'لا توجد نسخة احتياطية محفوظة لهذا السيرفر.' });
+                }
+                await UserLevel.deleteMany({ guildId: interaction.guild.id });
+                await UserLevel.insertMany(backup.levels.map(row => ({
+                    guildId: interaction.guild.id,
+                    userId: row.userId,
+                    xp: row.xp || 0,
+                    level: row.level || 1,
+                    msgCount: row.msgCount || 0
+                })), { ordered: false });
+                const embed = new EmbedBuilder()
+                    .setTitle('تم استرجاع المستويات')
+                    .setDescription(`تم استرجاع مستويات **${backup.levels.length}** عضو كما كانت قبل آخر تصفير.`)
+                    .setColor(0x2ecc71)
+                    .addFields({ name: 'تاريخ النسخة', value: `<t:${Math.floor(new Date(backup.resetAt).getTime() / 1000)}:F>`, inline: true })
+                    .setFooter({ text: 'هذه هي آخر نسخة احتياطية محفوظة.' })
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
+            }
+
+            if (interaction.commandName === 'invites') {
+                const inviter = interaction.options.getUser('user', true);
+                await interaction.deferReply();
+                const records = await InviteRecord.find({ guildId: interaction.guild.id, inviterId: inviter.id })
+                    .sort({ joinedAt: -1 }).lean();
+                const memberIds = records.map(record => record.invitedUserId);
+                const currentMembers = new Set();
+                for (const id of memberIds) {
+                    if (interaction.guild.members.cache.has(id)) currentMembers.add(id);
+                    else if (await interaction.guild.members.fetch(id).catch(() => null)) currentMembers.add(id);
+                }
+                const joined = records.length;
+                const stillHere = records.filter(record => currentMembers.has(record.invitedUserId)).length;
+                const left = joined - stillHere;
+                const details = records.length
+                    ? records.slice(0, 20).map(record => {
+                        const isHere = currentMembers.has(record.invitedUserId);
+                        return `${isHere ? '✅' : '❌'} <@${record.invitedUserId}> — ${isHere ? 'موجود حالياً' : 'غادر السيرفر'}\nالدعوة: \`${record.inviteCode}\` | الدخول: <t:${Math.floor(new Date(record.joinedAt).getTime() / 1000)}:d>`;
+                    }).join('\n\n')
+                    : 'لا توجد دعوات مسجلة لهذا العضو منذ تشغيل نظام التتبع.';
+                const embed = new EmbedBuilder()
+                    .setTitle(`إحصائيات دعوات ${inviter.tag}`)
+                    .setDescription(`العضو: <@${inviter.id}>\n\n**تفاصيل آخر ${Math.min(records.length, 20)} دعوة:**\n${details}`)
+                    .setThumbnail(inviter.displayAvatarURL({ dynamic: true }))
+                    .setColor(0xd4af37)
+                    .addFields(
+                        { name: 'إجمالي من دخلوا بدعواته', value: `\`${joined}\``, inline: true },
+                        { name: 'ما زالوا في السيرفر', value: `\`${stillHere}\``, inline: true },
+                        { name: 'غادروا السيرفر', value: `\`${left}\``, inline: true }
+                    )
+                    .setFooter({ text: 'يتم تسجيل الدعوات الجديدة تلقائياً عبر قاعدة البيانات.' })
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
+            }
+
             if (interaction.commandName === 'setbanner') {
                 const image = interaction.options.getAttachment('image');
                 await GuildConfig.findOneAndUpdate(
@@ -3002,7 +3116,7 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle(title)
                     .setDescription(text)
                     .setColor(0xd4af37)
-                    .setFooter({ text: `VORTEX  - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
+                    .setFooter({ text: `بوت خاص  - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
                     .setTimestamp();
                 if (image) embed.setImage(image.url);
 
@@ -3053,7 +3167,7 @@ client.on('interactionCreate', async (interaction) => {
                         { name: 'عدد الرتب', value: `${g.roles.cache.size}`, inline: true },
                         { name: 'تاريخ الإنشاء', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:D>`, inline: true },
                     )
-                    .setFooter({ text: 'VORTEX ' })
+                    .setFooter({ text: 'بوت خاص ' })
                     .setTimestamp();
                 return interaction.reply({ embeds: [embed] });
             }
@@ -3460,7 +3574,7 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
             )
             .setThumbnail(interaction.user.displayAvatarURL())
             .setTimestamp()
-            .setFooter({ text: 'VORTEX  - Tickets' });
+            .setFooter({ text: 'بوت خاص  - Tickets' });
 
         if (tConfig.topImagePath && fs.existsSync(tConfig.topImagePath)) {
             const topName = path.basename(tConfig.topImagePath);
@@ -3518,7 +3632,7 @@ async function fetchKickChannel(username) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
-        const headers = { Accept: 'application/json', 'User-Agent': 'VORTEX-Bot/2.0' };
+        const headers = { Accept: 'application/json', 'User-Agent': 'بوت خاص' };
         for (const version of ['v2', 'v1']) {
             const response = await fetch(`https://kick.com/api/${version}/channels/${encodeURIComponent(username)}`, {
                 headers, signal: controller.signal
@@ -3611,7 +3725,7 @@ const categorySlug = categorySource?.slug || null;
                         streamer.lastCategoryName = categoryName;
                         streamer.kickUsername = username;
                         changed = true;
-                    } else if (isLive && streamer.isLive && categoryName && streamer.lastCategoryName && categoryName !== streamer.lastCategoryName) {
+                    } else if (isLive && streamer.isLive && config.categoryNotifications && categoryName && streamer.lastCategoryName && categoryName !== streamer.lastCategoryName) {
                         const targetChannel = channel?.isTextBased() ? channel : null;
                         const categoryUrl = categorySlug ? `https://kick.com/category/${categorySlug}` : `https://kick.com/${username}`;
                         if (targetChannel) {
@@ -3660,338 +3774,6 @@ const categorySlug = categorySource?.slug || null;
 }
 
 setInterval(checkKickLive, Number(process.env.KICK_CHECK_INTERVAL_MS || 30000));
-
-// ==========================================
-// 14.5 Iraqi Poetry System (شعر عراقي دوري)
-// ==========================================
-
-const Poem = mongoose.model('Poem', new mongoose.Schema({
-    text: { type: String, required: true, unique: true },
-    meaning: { type: String, default: 'يحچي عن إحساس صادق ومشاعر من القلب.' }
-}));
-
-const PoetryConfig = mongoose.model('PoetryConfig', new mongoose.Schema({
-    guildId: { type: String, required: true, unique: true },
-    enabled: { type: Boolean, default: false },
-    channelId: String,
-    roleId: String,
-    intervalMinutes: { type: Number, default: 2 },
-    lastSentAt: Date,
-    // طابور مخلوط من الـ ObjectId الخاصة بالأبيات المتبقية قبل إعادة التدوير، لضمان عدم تكرار أي بيت قبل ما تخلص كل الأبيات
-    queue: [{ type: mongoose.Schema.Types.ObjectId }]
-}));
-
-// أبيات شعر عراقي قصيرة، من تأليف أصلي بأسلوب الشعر الشعبي العراقي (دارمي/أبوذية/حكم) - مو منسوخة من أي مصدر
-const IRAQI_POEMS_SEED = [
-"يا كل ما جيت أحجيلك تعب اللسان\nوتبقه الروح تدور الك أمان",
-"سؤال الك ياكلبي شنو الدوه\nيريد الصبر ما بيه اشوفه",
-"دربنه طويل وياريت نوصل\nولو تعبت الروح ما ننكسر",
-"الفرگه صعبه بس الذكرى أصعب\nتبقه تدور بيك وياك تهرب",
-"شفتك من بعيد وحسيت گلبي\nيرجف مثل ريشه بيها الهوه",
-"چم مره گلت اسكت وما گدرت\nلأن الحچي يفضح اللي مخبيه",
-"عيوني تدور دربك بكل مكان\nولو غبت ساعة تحسبها زمان",
-"ما اريد غيرك ولا غيرك أريد\nوروحي بيك تحلم وتعيد",
-"صبرت وصبري صار مثل الجبل\nبس گلبي ما زال يحبك ويحل",
-"يا طيرالبيك اطير وياه\nخذ سلامي واحچيله اشتياگه",
-"الدنيه دوارة وحنه بيها ضيوف\nنعيش يومين وناخذ الحلوف",
-"گلبي صغير بس همومه چبار\nيتحمل الجرح وما يبين آثار",
-"مو كل اللي يبتسم يكون مرتاح\nبعضهم يبچي بداخله وياه سلاح",
-"العمر مايوگف على حالة\nيمشي ويمشي وياخذ رجالة",
-"لو تسال الگلب شلون حاله\nيگلك تعبان بس ما يبين حاله",
-"ما يفهم الحزن الا اللي ذاگه\nوما يعرف الفرح الا اللي باگه",
-"صديج زين يسوه ألف قريب\nويبقه وياك بالفرح والنصيب",
-"الصدگ صعب بزمن الكذب سهل\nبس اللي يصدگ يبقه بالمحل",
-"چم ندمت على كلمة گلتها\nوچم فرحت بابتسامة رديتها",
-"الوگت يمشي وما يوگف لحد\nخذ العبرة وسوي الخير وحد",
-"يا ليل طول وخل الهم يفوت\nولا تخليني اعيش بهل السكوت",
-"العتب مو حل والصبر أحسن طريج\nلأن الصبر بالآخر يصير بريج",
-"ما كل من يضحك گلبه مرتاح\nوما كل من يبچي يريد سماح",
-"احبك مثل ما يحب الگمر الليل\nوانته بگلبي مثل ماي السيل",
-"سكتنه سنين وحچينه بساعة\nلأن الشوگ ما يعرف طاعة",
-"يا وطني الغالي وين ما اروح\nگلبي وياك وروحي معك تلوح",
-"الاصل يبين بالمواقف مو بالحچي\nواللي اصله زين يبين بلا شي",
-"چان الفراگ صعب واليوم اصعب\nبس الأمل يبقه وما ينهزم",
-"من كثر ما تعبت ما بقه ادعي\nبس اني اعرف الرب يسمعني",
-"يا ايام مرت شگد كانت حلوة\nوليتها ترجع ولو ساعة وحدة",
-"الوفه صار غالي والناس تغيرت\nبس گلبي الطيب ما زال ثابت",
-"العين تشوف والگلب يحس\nوالروح تعرف اللي بيها امس",
-"مو عيب تبچي إذا الجرح وجعك\nالعيب تخفي وتخلي الهم ياكلك",
-"يا نجمة بالسمه شفتيه وين راح\nخبريه اني لهسه بعده ما ارتاح",
-"دنيه غدارة وناسها تتغير\nبس روحي الطيبة ما راح تتغير",
-"چم درب مشيته لحد ما وصلت\nوچم مرة تعبت وچم مرة ابتسمت",
-"احچيلك عن گلبي وشلون تعب\nوانته السبب باللي صاير وسبب",
-"العمر گصير والدنيه فانية\nخل نعيش بالخير ونترك امانة",
-"يا حبيبي البعد صعب ونار\nبس گلبي بيك يفتخر ويفتخر",
-"الصبر مفتاح الفرج يا اخوان\nولو طال الليل لازم يجي الاذان",
-"ما ننسه اللي وقف وياي بضيقي\nولا ننسه اللي زرع الشوگ بطريقي",
-"يا حظي العاثر ليش دايم تلعب\nخليني مرة اضحك بلا تعب",
-"الگلب يعشگ والعين تدمع\nوالروح تحن للي ما ترجع",
-"عيني تدور وجهك بكل زحمة\nوالگلب يحسب ثانية سنة",
-"يا ريتني طير اطير وياك\nواحط براس التل واحچيلك احچاياك",
-"مثل شمعة تحترگ وتنور غيرها\nهيچي الطيب يفنى ويبقه ذكرها",
-"البعد قاسي والوصل احلى امنية\nوگلبي دايم يحلم بيك ثانية",
-"لا تلوم گلبي إذا حن لأصله\nفكل شي براسه يرجع لأهله",
-"يا ورده حمره شبيهه خدك\nوريحتك بالگلب ما تفارگ عندك",
-"العمر مثل الماي يمشي وما يرجع\nخل نغتنم كل يوم قبل ما يوجع",
-"صرت اتعلم من جروحي دروس\nواعرف مين الصادگ ومين الفلوس",
-"يا صاحبي الزين وين ما تروح\nذكرك بگلبي ما يفارگ ولا يروح",
-"الگربه صعبة والوطن بالگلب\nولو غبنه سنين نرجع بلا حسب",
-"چم مرة گلت راح انسه واعيش\nبس گلبي يرجع ليك بلا تفتيش",
-"يا شمعة العمر ليش تنطفي بسرعة\nخلي ضويچ يبقه بالگلب دفعة",
-"الحچي يبين شنو نوع الانسان\nوالصمت احيان يحچي اكثر من لسان",
-"يا غايب عن عيني حاضر بروحي\nما ينسه گلبي غيابك يا نوحي",
-"العتب صار موده بزمن الغربه\nوالصبر صار زاد يا هل التربة",
-"شگد صعب اضحك وگلبي مكسور\nبس الحياة تفرض هل الشعور",
-"يا ريت الزمن يرجع الينه ايام\nنعيشها من جديد بلا ازعاج والام",
-"الصدگ يبقه ولو مر الزمان\nوالكذب ينكشف ولو طال الأمان",
-"گلبي تعلم يصبر على الجراح\nويحاول دايما يلگه طريج الفلاح",
-"يا ابو العيون السود شفتك وهويت\nوانسه العالم كله وياك سبيت",
-"الدرب طويل والزاد گليل\nبس العزيمة توصلنه بالتفصيل",
-"يا حزن گلبي متى بتروح وتخلص\nتعبت اتحمل وابچي واتنفس",
-"الاصدقاء بوگت الضيگ يبينون\nواللي يصبرون وياك هم الطيبون",
-"يا ليل خذني بعيد عن همومي\nوردني اطفل العب بايامي",
-"العشگ صعب لو صادگ ونظيف\nويصير سهل لو كان زيف وخفيف",
-"چم حاولت انسه وچم فشلت\nلأن الذكرى بگلبي ما اندفنت",
-"يا وردة الصبر تفتحي بروحي\nوخليني اتحمل واقاوم جروحي",
-"الگلب لو صافي يشوف الصفه\nوالعين الحسودة ما تشوف الا العله",
-"يا نسمة الصبح خذي سلامي\nوصليه لحبيبي بعيد امامي",
-"العمر فرصة وحدة وما ترجع\nخل نعيشها بمعنه وما نضيع",
-"چم مره سامحت وچم مره جرحوني\nبس گلبي الطيب دايم يرجع لهوني",
-"يا اهل الطيبة الله يخليكم\nوياريت دايما الخير يوصلكم",
-"الصبر مو ضعف الصبر قوة\nواللي يصبر بالنهاية يلگه الحلوة",
-"يا نجمة تلمعين وسط الظلام\nكوني دليلي واهديني للسلام",
-"العتاب بين الحبايب دليل شوگ\nوالسكوت بينهم اصعب من الفراگ",
-"چم درب سلكته لحد ما لگيتك\nوچم ليلة سهرت وانه اتذكرك",
-"يا ابو الگلب الطيب زادك الله خير\nوخلا ربي يحفظك من كل شر",
-"العين لما تدمع تفضح گلب حزين\nوالابتسامة احيانا تخفي جرح دفين",
-"يا وطن الاجداد كل الگلب اليك\nولو بعدت اجسادنه ارواحنه اليك",
-"الصبر مفتاح والدعه سلاح\nوالله كريم يبدل الضيگ فلاح",
-"يا صديج العمر شكراً على وفاك\nوعلى وگفتك وياي بايام شگاك",
-"العمر دقايق تعدي وما ترجع\nخل كل دقيقة نعيشها ما تضيع",
-"چم مره حاولت اداري دمعتي\nبس الحزن يبين ولو خفيت غصتي",
-"يا رب فرجها على كل مهموم\nواسترها على كل مذنوب ومظلوم",
-"الحياة درس وكل يوم فصل جديد\nنتعلم ونغلط ونحاول نعيد",
-"يا حمامة السطح غنيلي شوية\nخفف عني الهم بهل العشية",
-"العتب الك يا زمن ليش تدور\nوتاخذ الطيبين وتخلي الشرور",
-"چم شخص مر بحياتي وترك اثر\nوچم شخص نسيته بلمح البصر",
-"يا اهل الگلوب الصافية دوموا هيچي\nلأن الدنيه تحتاج قلوب نظيفة",
-"الفرح لو صادگ ينور الوجه\nوالحزن لو ثگيل يبين بلا لبس",
-"يا نور عيني وين ما تكون تنور\nودربك بگلبي محفور ومسطور",
-"العمر مثل الكتاب كل يوم صفحة\nنكتبها احنه ونعيش القصة",
-"چم مرة ضحكت وگلبي يبچي بداخل\nوچم مرة صبرت والصبر بيه فاصل",
-"يا ابو الخلگ الزين تسلم يمينك\nوربي يديم عليك الخير ويحفظك",
-"الصدگ نور ولو كان مر\nوالكذب ظلام ولو زين المظهر",
-"يا صوت الاذان يريح گلوبنه\nويذكرنه بربنه وبديننه",
-"العتاب حلو لو كان بين الاحباب\nويصير مر لو زاد عن الاسباب",
-"چم ليلة سهرت اداري همومي\nوچم صباح ابتسمت رغم جروحي",
-"يا اهل الوفه دوموا الينه سند\nوخلوا المحبة تجمعنه للأبد",
-"العمر لو طال او گصر لازم ينتهي\nخل نسوي الخير قبل لا ينتهي",
-"يا شمس الصبح طلعي بهاء\nوخلي النور يمحي كل ظلماء",
-"الگلب الطيب ما يحمل حقد\nويسامح ويصفح ويبقه بالود",
-"چم مرة گلت هذا اخر العنه\nوچم مرة رجعت نفس المكان",
-"يا نسيم الفجر خذني بعيد\nوردني اعيش يوم زين وسعيد",
-"العمر رحلة والزاد الايمان\nوالصبر رفيگ يوصلنه للأمان",
-"يا صديگ الدرب شكرا لوجودك\nوعلى المحبة اللي دايم بعهودك",
-"الحزن يمر مثل ما تمر الغيمة\nوبعده تطلع شمس الفرح بحكمة",
-"چم مره سالت الگمر عنك يريد\nوچم مره حچيت الريح بلا ما تعيد",
-"يا اهل البيت العتيگ ذكراكم تعيش\nوگلوبنه بيها الحنين ما يطيش",
-"العمر گصير والدنيه ما تدوم\nخل نعيش بمحبة وناخذ عبر ونهوم",
-"يا طير الحمام غني للمحبين\nوخبرهم اننه دايما ذاكرين",
-"الصبر تاج ما يلبسه الا الكرام\nواللي يصبر ينال في الاخر مقام",
-"چم درب صعب مشيته لحد النور\nوچم مرة كنت اظن اني مقهور",
-"يا اهل الطيبة نورو دربنه\nوخلو المحبة تسود بيننه",
-"العتب على الزمن مو على الناس\nلأن الزمن هو اللي يغير الاحساس",
-"يا صوت الگيثارة عزف الأسى\nخل الالحان توصف اللي جرى",
-"الگلب الجريح يشفى بوگتها\nويرجع يحب ويعيش فرحتها",
-"چم مرة ندمت وچم مرة سامحت\nوچم مرة بالصمت گلبي تكلم وباح",
-"يا اهل الاصالة انتم زين الديار\nوبيكم نفتخر ونعيش بكل فخار",
-"العمر لحظات تعدي وتنمحي\nخل كل لحظة نعيشها بمعنى وحي",
-"يا ابو الطيبة يخليك الله لينه\nونورك يبقه دايم يهدينه",
-"الصدگ بالحچي يبين الرجال\nوالكذب يفضح صاحبه بلا سؤال",
-"چم مرة تعبت وچم مرة ارتحت\nوچم مرة بعد الظلام النور لمحت",
-"يا نجوم الليل شهدوا على شوگي\nوعلى صبري وعلى طول طريگي",
-"العمر امانة والوگت يمشي بسرعة\nخل نسوي فيه اللي يفرح وينفعنه",
-"يا صديگ الطفولة وين ما تكون\nذكرياتنه بگلبي ما تهون",
-"الفرح الحقيقي يجي من گلب صافي\nوما يشترى بمال ولا بفلوس وافي",
-"چم حلم حلمته وچم حلم تحقق\nوچم مرة بالصبر طريگي انفتح",
-"يا اهل الگرية الطيبة عادت الينه ذكرى\nوگلبي بيها يحن وياخذ صورة",
-"العمر مدرسة نتعلم منها كل يوم\nونحاول نصلح اخطانه ونقوم",
-"يا شمس المغيب ودعي بهدوء\nوخلي غدنه يجي احلى وانقى",
-"الصبر على البلوى فرج قريب\nوالله كريم مايخلي عبده بلا نصيب",
-"چم صديج صدگ وچم صديج خان\nوگلبي مايزال يثق ومايهان",
-"يا اهل المحبة دوموا كل هالطيب\nوخلو الگلوب تلتگي بلا عيب",
-"العمر كتاب وكل صفحة درس\nنتعلم منها ونمشي بلا وسواس",
-"يا طير مسافر خذ اشواگي وياك\nوردهن الحبيب اللي دايم بباله",
-"الگلب الوفي ما ينسه اهله\nولو بعدت المسافة يبقه فيهم امله",
-"چم مرة بچيت من الفرح لا من الحزن\nوچم مرة ضحكت وگلبي بيه شجن",
-"يا اهل الصبر ربي وياكم دايما\nويجزيكم خير على كل ما تحملتوا",
-"العمر لو طال يبقه ذكرى حلوة\nولو گصر يبقه بگلوبنه صورة",
-"يا نسيم الليل بلغ سلامي\nلكل حبيب بعيد عن مكاني",
-"الصدگ سلاح ولو كان صعب حمله\nوالكذب راحة موقتة وبعدها ذله",
-"چم درب مشيته وچم درب بقه\nوگلبي دايم يدور طريگ الحق",
-"يا اهل الوفه انتم زين الزمان\nوبيكم نفتخر بكل مكان",
-"العمر رحلة قصيرة بس عميقة\nنعيشها بمحبة ونخلي الذكرى رقيقة"
-];
-
-// إضافات مولّدة من تراكيب أصلية باللهجة العراقية حتى يصير العدد قريب من 400 بيت.
-// كل بيت ينحفظ ويّاه معنى واضح، والأبيات تبقى بدون تكرار.
-const GENERATED_IRAQI_POEMS = [
-    ['يا گلبي لا تگدر على كل فرگه', 'تره بعد العسر تضحكلك الدنيا', 'المعنى: لا تستسلم للحزن، لأن الفرج يجي بعد التعب.'],
-    ['على طاري الوفه تنذكر الوجوه', 'والطيب يبقى لو تتبدل الأيام', 'المعنى: الإنسان الوفي تبقى قيمته حتى لو تغيّرت الظروف.'],
-    ['هواي ناس مرّت وما خلّت أثر', 'وانت بگلبـي صرت أول وآخر', 'المعنى: بعض الأشخاص يكون حضورهم عابر، بينما الحبيب يترك أثراً عميقاً.'],
-    ['يا ليل خلّي نجومك شاهدات', 'على گلب صابر وما باع الود', 'المعنى: الصبر والوفاء يثبتان صدق المشاعر مهما طال الانتظار.'],
-    ['چنت أظن الجرح يعلّم نسيان', 'طلع يعلّم شلون نختار الناس', 'المعنى: التجارب المؤلمة تعلّمنا التمييز بين الصادق والمزيّف.'],
-    ['من ينكسر خاطر الطيب يهدأ', 'بس تبقى بعيونه سالفة عمر', 'المعنى: الشخص الطيب قد يسكت عن ألمه، لكن أثره يبقى في داخله.'],
-    ['يا صاحبي لا تشيل الهم وحدك', 'تره الرفقة الصدگ تسند جبل', 'المعنى: الصديق الحقيقي يخفف الحمل ويقف معك في الشدائد.'],
-    ['لو ضاگت الدنيا بوجهك يوم', 'افتح باب الدعاء تلقى أمان', 'المعنى: اللجوء إلى الله يمنح القلب طمأنينة وقت الضيق.'],
-    ['الشوگ مو كلمة وتنقال بساعة', 'الشوگ عمر يظل بالروح ساكن', 'المعنى: الاشتياق الحقيقي إحساس طويل يعيش في القلب ولا ينتهي بسرعة.'],
-    ['يا وردة بستاني لا تميلين', 'تره ريحتچ ترد الروح للبيت', 'المعنى: الحضور الجميل يعيد الفرح والدفء إلى المكان والقلب.'],
-    ['ما هزّني حچي الناس لو كثر', 'اللي يعرف أصله ما يلتفت', 'المعنى: صاحب المبدأ لا يتأثر بكلام الناس ما دام يعرف قيمته.'],
-    ['الدرب لو بيه شوك نمشيه', 'المهم آخره يفتح للفرح باب', 'المعنى: الصعوبات تهون عندما يكون الهدف يستحق الوصول.'],
-    ['يا حلم لا تسرع وتتركني وحدي', 'تره من دونك ما يطيب السهر', 'المعنى: الأمل هو الذي يجعل الانتظار والتعب محتملين.'],
-    ['گلبـي تعلّم من سكوتك حچي', 'وصار يفسّر كل نظرة عيون', 'المعنى: المحبة الصادقة تفهم الإشارات حتى من دون كلام.'],
-    ['الما يگدر يحفظ العشرة يوم', 'لا يطلب من گلبك تبقى وياه', 'المعنى: الوفاء مسؤولية، ومن يضيّع العشرة لا يحق له طلب البقاء.'],
-    ['من يزرع الخير بگلوب البشر', 'يحصد محبة لو بعد حين', 'المعنى: المعروف يرجع إلى صاحبه ولو بعد وقت.'],
-    ['يا شمس خلي دفوچ ببيوتنه', 'تره البرد مو بس بالجو يصير', 'المعنى: القسوة قد تكون في المشاعر، والحنان هو الدفء الحقيقي.'],
-    ['الذكرى لو توجع تبقى غالية', 'لأن بيها ضحكة ناس نحبهم', 'المعنى: الذكريات المؤلمة تظل عزيزة لأنها مرتبطة بأشخاص مهمين.'],
-    ['لا تحسب الهدوء ضعف وخوف', 'مرات السكوت أبلغ جواب', 'المعنى: الصمت أحياناً يدل على الحكمة والقوة وليس العجز.'],
-    ['يا وطن يا ريحة أهلنه', 'بكل غربة نرجعلك بالبال', 'المعنى: الوطن يبقى حاضراً في القلب مهما ابتعد الإنسان عنه.']
-]
-for (const [first, second, meaning] of GENERATED_IRAQI_POEMS) {
-    for (const suffix of [
-        'وبعدها يجي الفرج', 'والطيب ما يضيع', 'والأمل يبقى حي', 'والگلب يعرف دربه', 'والعشرة إلها قدر', 'والله يكتب خير',
-        'وما ننحني للضيم', 'والفرحة ترد للدار', 'والصبر يجيب نتيجة', 'والحچي يبقى بميزان',
-        'والنية الطيبة تكفي', 'والبعد ما يطفي الود', 'والذكرى تبقى حلوة', 'والخير يفتح دربه'
-    ]) {
-        IRAQI_POEMS_SEED.push({ text: `${first}\n${second}، ${suffix}`, meaning });
-    }
-}
-
-// تحويل الأبيات القديمة إلى سجلات تحمل معنى، مع إبقاء النصوص كما هي.
-const POEM_MEANINGS = [
-    { words: ['فراگ', 'غياب', 'بعد', 'غايب'], values: ['المعنى: يحچي عن وجع الفراگ والاشتياگ لشخص غالي.', 'المعنى: يصف شلون الغياب يطوّل الوقت ويخلّي الذكرى حاضرة.', 'المعنى: يعبّر عن أمل الوصل رغم قسوة البعد.'] },
-    { words: ['صبر', 'جراح', 'حزن', 'هم', 'دمع'], values: ['المعنى: يعبّر عن تحمل التعب لحد ما يجي الفرج.', 'المعنى: يذكّر أن الجرح يعلّم الإنسان ويقوّي قلبه.', 'المعنى: يحچي عن حزن مخفي وراء السكوت والابتسامة.'] },
-    { words: ['صديج', 'رفيق', 'وفه', 'عشرة'], values: ['المعنى: يمدح الصديق اللي يوقف ويّاك بوقت الضيگ.', 'المعنى: يبيّن أن العشرة الصادقة أغلى من كثرة المعارف.', 'المعنى: يعبّر عن امتنان شخص ما نسى وگفة حبيبه.'] },
-    { words: ['وطن', 'دار', 'گرية', 'بيت', 'أهل'], values: ['المعنى: يعبّر عن حنين الروح للوطن والأهل.', 'المعنى: يبيّن أن الدار تبقى بالگلب حتى لو طال السفر.', 'المعنى: يحچي عن فخر الإنسان بمكانه وذكرياته.'] },
-    { words: ['حب', 'عشگ', 'حبيب', 'شوگ', 'گلبي'], values: ['المعنى: يعبّر عن محبة صادگة ساكنة بالگلب.', 'المعنى: يصف اشتياگ المحب لشخص ما يگدر ينساه.', 'المعنى: يحچي عن أثر الحبيب اللي يبقى بكل تفاصيل اليوم.'] },
-    { words: ['صدق', 'صدگ', 'كذب', 'مواقف', 'أصل'], values: ['المعنى: يوضح أن الصدگ يبان بالمواقف مو بكثرة الحچي.', 'المعنى: يفرّق بين صاحب الأصل وبين الكلام اللي ما وراه فعل.', 'المعنى: يذكّر أن الكذب ينكشف مهما طال الوقت.'] },
-    { words: ['عمر', 'وگت', 'دنيه', 'حياة', 'يوم'], values: ['المعنى: يذكّرنا أن العمر يمشي بسرعة ولازم نغتنم أيامه.', 'المعنى: يحثّ على ترك أثر طيب قبل ما تمر السنين.', 'المعنى: يبيّن أن كل يوم فرصة جديدة للتغيير والفرح.'] }
-];
-function meaningForPoem(text) {
-    const source = String(text || '');
-    const matched = POEM_MEANINGS.find(group => group.words.some(word => source.includes(word)));
-    const values = matched?.values || ['المعنى: يحچي عن إحساس صادق وتجربة من تجارب الحياة.', 'المعنى: يعبّر عن مشاعر وتجربة تركت أثرها بالروح.', 'المعنى: يصف إحساساً عميقاً يمر بيه الإنسان بحياته.'];
-    let hash = 0;
-    for (const char of source) hash = (hash * 31 + char.codePointAt(0)) >>> 0;
-    return values[hash % values.length];
-}
-function resolvedPoemMeaning(poem) {
-    const stored = String(poem?.meaning || '').trim();
-    return !stored || stored === 'يحچي عن إحساس صادق ومشاعر من القلب.' || stored === 'المعنى: يحچي عن إحساس صادق وتجربة من تجارب الحياة.'
-        ? meaningForPoem(poem?.text)
-        : stored;
-}
-const NORMALIZED_POEMS = IRAQI_POEMS_SEED.map(item => typeof item === 'string'
-    ? { text: item, meaning: meaningForPoem(item) }
-    : item
-);
-
-
-async function seedPoemsIfNeeded() {
-    try {
-        const docs = [...new Map(NORMALIZED_POEMS.map(item => [item.text, item])).values()];
-        for (const poem of docs) {
-            await Poem.updateOne({ text: poem.text }, { $setOnInsert: poem, $set: { meaning: poem.meaning } }, { upsert: true }).catch(() => {});
-        }
-        const count = await Poem.countDocuments();
-        console.log(`[Poetry] تم تجهيز ${count} بيت شعر عراقي في قاعدة البيانات.`);
-    } catch (err) {
-        console.error('[Poetry Seed Error]', err.message);
-    }
-}
-
-async function refillPoetryQueue(config, excludeId = null) {
-    const allIds = (await Poem.find({}, { _id: 1 }).lean()).map(p => p._id.toString());
-    if (allIds.length === 0) return [];
-    // خلط عشوائي (Fisher-Yates)
-    for (let i = allIds.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [allIds[i], allIds[j]] = [allIds[j], allIds[i]];
-    }
-    // نتجنب انو نفس البيت الاخير يطلع اول وحدة بالدورة الجديدة إذا العدد يسمح
-    if (excludeId && allIds.length > 1 && allIds[0] === excludeId.toString()) {
-        [allIds[0], allIds[1]] = [allIds[1], allIds[0]];
-    }
-    return allIds;
-}
-
-async function sendPoemToGuild(config) {
-    const guild = client.guilds.cache.get(config.guildId);
-    if (!guild) return;
-    const channel = guild.channels.cache.get(config.channelId) || await guild.channels.fetch(config.channelId).catch(() => null);
-    if (!channel?.isTextBased?.()) return;
-
-    let queue = Array.isArray(config.queue) ? [...config.queue] : [];
-    if (queue.length === 0) {
-        queue = await refillPoetryQueue(config);
-        if (queue.length === 0) return; // لا يوجد أي شعر بقاعدة البيانات
-    }
-
-    const nextId = queue.shift();
-    const poem = await Poem.findById(nextId).catch(() => null);
-
-    config.queue = queue;
-    config.lastSentAt = new Date();
-    await config.save().catch(() => {});
-
-    if (!poem) return; // البيت انحذف بينهم، الدورة الجاية بتصلحها
-
-    const guildConfig = await GuildConfig.findOne({ guildId: guild.id }).lean().catch(() => null);
-    const bannerURL = guildConfig?.welcome?.bannerURL;
-    const actualMeaning = resolvedPoemMeaning(poem);
-    if (poem.meaning !== actualMeaning) {
-        await Poem.updateOne({ _id: poem._id }, { $set: { meaning: actualMeaning } }).catch(() => {});
-    }
-    const embed = new EmbedBuilder()
-        .setTitle('بيت شعر عراقي')
-        .setDescription(`**${String(poem.text).replace(/\n/g, '\n')}**`)
-        .addFields(
-            { name: 'ــــــــــــــــــــــــــــ', value: 'ــــــــــــــــــــــــــــ', inline: false },
-            { name: 'المعنى', value: actualMeaning, inline: false }
-        )
-        .setColor(0xff0000)
-        .setFooter({ text: 'VORTEX - الشعر العراقي' })
-        .setTimestamp();
-    if (bannerURL) embed.setImage(bannerURL);
-
-    const mention = config.roleId ? `<@&${config.roleId}>` : undefined;
-    await channel.send({ content: mention, embeds: [embed], allowedMentions: config.roleId ? { roles: [config.roleId] } : undefined }).catch(e => console.error('[Poetry Send Error]', e.message));
-}
-
-let poetryCheckRunning = false;
-async function checkPoetrySchedules() {
-    if (poetryCheckRunning) return;
-    poetryCheckRunning = true;
-    try {
-        const configs = await PoetryConfig.find({ enabled: true, channelId: { $exists: true, $ne: '' } });
-        const now = Date.now();
-        for (const config of configs) {
-            const intervalMs = Math.max(1, config.intervalMinutes || 2) * 60 * 1000;
-            const last = config.lastSentAt ? new Date(config.lastSentAt).getTime() : 0;
-            if (now - last >= intervalMs) {
-                await sendPoemToGuild(config);
-            }
-        }
-    } catch (err) {
-        console.error('[Poetry Scheduler Error]', err.message);
-    } finally {
-        poetryCheckRunning = false;
-    }
-}
-
-// نفحص كل 20 ثانية بس الإرسال الفعلي يصير بس إذا وصل وگت العدّاد الخاص بكل سيرفر (intervalMinutes)
-setInterval(checkPoetrySchedules, 20 * 1000);
-
 
 // ==========================================
 // 15. Slash Commands Registration
@@ -4161,6 +3943,13 @@ async function registerSlashCommands() {
         new SlashCommandBuilder().setName('memberhistory').setDescription('عرض سجل عضو كامل')
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
             .addUserOption(o => o.setName('user').setDescription('العضو المطلوب').setRequired(true)),
+        new SlashCommandBuilder().setName('invites').setDescription('عرض إحصائيات دعوات عضو')
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+            .addUserOption(o => o.setName('user').setDescription('العضو المطلوب').setRequired(true)),
+        new SlashCommandBuilder().setName('resetlevels').setDescription('تصفير جميع مستويات السيرفر مع حفظ نسخة احتياطية')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('restorelevels').setDescription('استرجاع المستويات المحفوظة قبل آخر تصفير')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('emojiinfo').setDescription('عرض معلومات إيموجي')
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageEmojisAndStickers)
             .addStringOption(o => o.setName('emoji').setDescription('ID الإيموجي').setRequired(true)),
@@ -4169,7 +3958,7 @@ async function registerSlashCommands() {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     try {
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        console.log('[VORTEX ] Slash commands registered.');
+        console.log('[بوت خاص ] Slash commands registered.');
     } catch (err) {
         console.error('[Slash Register Error]', err);
     }
@@ -4180,9 +3969,9 @@ async function registerSlashCommands() {
 // ==========================================
 
 client.once('ready', async () => {
-    console.log(`[VORTEX ] Bot is online as ${client.user.tag}`);
+    console.log(`[بوت خاص ] Bot is online as ${client.user.tag}`);
     client.user.setPresence({
-        activities: [{ name: 'VORTEX ', type: ActivityType.Watching }],
+        activities: [{ name: 'بوت خاص ', type: ActivityType.Watching }],
         status: 'online'
     });
 
@@ -4200,10 +3989,9 @@ client.once('ready', async () => {
         console.error('[Jail Resume Error]', err);
     }
 
+    for (const guild of client.guilds.cache.values()) await fetchGuildInvites(guild);
     await registerSlashCommands();
-    await seedPoemsIfNeeded();
     checkKickLive();
-    checkPoetrySchedules();
 });
 
 // ==========================================
@@ -4212,10 +4000,10 @@ client.once('ready', async () => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`[VORTEX ] Dashboard running on port ${PORT}`);
+    console.log(`[بوت خاص ] مركز التحكم يعمل on port ${PORT}`);
 });
 
 client.login(process.env.TOKEN).catch(err => {
-    console.error('[VORTEX ] Login failed:', err);
+    console.error('[بوت خاص ] Login failed:', err);
     process.exit(1);
 });
