@@ -626,16 +626,6 @@ const checkBotGuildAccess = (req, res, next) => {
     next();
 };
 
-const checkGuildAccess = (req, res, next) => {
-    const guildId = req.params.guildId;
-    const guild = req.user?.guilds?.find(g => g.id === guildId);
-    if (!guild) return res.status(403).send('ليس لديك صلاحية إدارة هذا السيرفر.');
-    try {
-        const permissions = BigInt(guild.permissions || 0);
-        if ((permissions & 8n) !== 8n && (permissions & 32n) !== 32n) return res.status(403).send('تحتاج إلى صلاحية إدارة السيرفر أو Administrator.');
-    } catch { return res.status(403).send('صلاحيات السيرفر غير صالحة.'); }
-    next();
-};
 
 // Any authenticated Discord user may access the dashboard.
 // The bot must still be present in the selected guild.
