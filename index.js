@@ -584,7 +584,7 @@ passport.use(new Strategy({
 }, (accessToken, refreshToken, profile, done) => done(null, profile)));
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'VORTEX -secret-key-2026',
+    secret: process.env.SESSION_SECRET || 'BOT-secret-key-2026',
     resave: false,
     saveUninitialized: false
 }));
@@ -597,35 +597,18 @@ const checkAuth = (req, res, next) => {
     res.redirect('/login');
 };
 
-const checkDashboardOwner = (req, res, next) => {
-    const ownerId = String(process.env.DASHBOARD_OWNER_ID || '').trim();
-    if (!ownerId) return res.status(500).send('DASHBOARD_OWNER_ID غير مضبوط في متغيرات البيئة.');
-    if (String(req.user?.id || '') !== ownerId) return res.status(403).send('هذا الحساب غير مخول لدخول لوحة التحكم.');
-    next();
-};
-
 const checkBotGuildAccess = (req, res, next) => {
     if (!client.guilds.cache.has(req.params.guildId)) return res.status(404).send('البوت غير موجود في هذا السيرفر.');
     next();
 };
 
-const checkGuildAccess = (req, res, next) => {
-    const guildId = req.params.guildId;
-    const guild = req.user?.guilds?.find(g => g.id === guildId);
-    if (!guild) return res.status(403).send('ليس لديك صلاحية إدارة هذا السيرفر.');
-    try {
-        const permissions = BigInt(guild.permissions || 0);
-        if ((permissions & 8n) !== 8n && (permissions & 32n) !== 32n) return res.status(403).send('تحتاج إلى صلاحية إدارة السيرفر أو Administrator.');
-    } catch { return res.status(403).send('صلاحيات السيرفر غير صالحة.'); }
-    next();
-};
+// Private bot: any logged-in Discord account can manage any server the bot is in.
+// Logging in through Discord OAuth is the access gate — no per-guild role/permission is required.
+app.use('/manage/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/save/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/toggle-kick-category/:guildId', checkAuth, checkBotGuildAccess);
 
-// The dashboard owner may view and configure every guild where the bot is present.
-// Discord permissions are still checked separately before each bot action.
-app.use('/manage/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/save/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/delete-kick/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/toggle-kick-category/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
 
 app.get('/auth/discord', passport.authenticate('discord'));
 app.get('/callback', passport.authenticate('discord', { failureRedirect: '/login' }), (req, res) => {
@@ -641,7 +624,7 @@ app.get('/login', (req, res) => {
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VORTEX · الدخول</title>
+<title>BOT · الدخول</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#08070f;--panel:#12111f;--panel-2:#181729;--violet:#8b6bff;--violet-2:#5b3df0;--cyan:#38e8d4;--red:#f0554d;--text:#f3f1fb;--muted:#948fb3;--line:rgba(139,107,255,.22)}
@@ -676,7 +659,7 @@ body:after{content:'';position:fixed;inset:0;pointer-events:none;opacity:.5;back
 <i class="orb orb1"></i><i class="orb orb2"></i><i class="orb orb3"></i>
 <main class="login-shell">
     <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg></div>
-    <div class="micro">VORTEX / CONTROL CENTER</div>
+    <div class="micro">BOT / CONTROL CENTER</div>
     <h1>أهلًا بك في مركز التحكم</h1>
     <p>سجّل الدخول بحساب Discord المصرّح له للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p>
     <div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div>
@@ -720,7 +703,7 @@ function ui(guild, active, content) {
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${safe(guildName)} · VORTEX</title>
+<title>${safe(guildName)} · BOT</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#08070f;--panel:#12111f;--panel-2:#181729;--panel-3:#1e1d34;--line:rgba(139,107,255,.18);--line-strong:rgba(139,107,255,.4);--gold:#8b6bff;--gold-2:#5b3df0;--cyan:#38e8d4;--red:#f0554d;--red-soft:rgba(240,85,77,.14);--muted:#948fb3;--text-muted:#948fb3;--text:#f3f1fb;--gold-border:rgba(139,107,255,.18);--gold-glow:rgba(139,107,255,.35);--dark:#08070f;--shadow:0 22px 70px rgba(0,0,0,.45);--rail:272px}
@@ -731,9 +714,9 @@ function ui(guild, active, content) {
 </head>
 <body>
 <div class="app">
-<aside class="rail" id="rail"><div class="brand"><div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg></div><div><strong>VORTEX</strong><small>CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
+<aside class="rail" id="rail"><div class="brand"><div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg></div><div><strong>BOT</strong><small>CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
 <div class="drawer-backdrop" id="backdrop"></div>
-<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>VORTEX / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg></a><a href="/logout" title="تسجيل الخروج"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
+<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>BOT / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg></a><a href="/logout" title="تسجيل الخروج"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
 </div>
 <script>
 (() => { const rail=document.getElementById('rail'), backdrop=document.getElementById('backdrop'), btn=document.getElementById('menuBtn'); if(!rail||!backdrop||!btn)return; const close=()=>{rail.classList.remove('is-open');backdrop.classList.remove('is-open')}; btn.addEventListener('click',()=>{rail.classList.toggle('is-open');backdrop.classList.toggle('is-open')}); backdrop.addEventListener('click',close); window.addEventListener('keydown',e=>{if(e.key==='Escape')close()}); })();
@@ -819,7 +802,7 @@ app.post('/save/:guildId/admincmds', checkAuth, async (req, res) => {
 // ==========================================
 
 // --- [ Dashboard - Server List ] ---
-app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
+app.get('/dashboard', checkAuth, (req, res) => {
     const botGuilds = [...client.guilds.cache.values()];
     const cards = botGuilds.map(g => {
         const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
@@ -835,7 +818,7 @@ app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
         <div style="font-size:44px; font-weight:800; letter-spacing:6px;
             background: linear-gradient(135deg, var(--gold), var(--cyan) 55%, #fff);
             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-            margin-bottom:10px;">VORTEX</div>
+            margin-bottom:10px;">BOT</div>
         <p style="color:var(--text-muted); font-size:15px;">اختر السيرفر لإدارته</p>
         <div style="margin-top:20px; max-width:400px; margin-left:auto; margin-right:auto; position:relative;">
             <input type="text" id="guildSearch" placeholder="ابحث عن سيرفر..." onkeyup="filterGuilds()" style="text-align:center; border-radius:20px; background:rgba(139,107,255,.06); border:1px solid var(--gold-border);">
@@ -877,7 +860,7 @@ async function createGuildInvite(guild) {
             maxAge: 0,
             maxUses: 0,
             unique: false,
-            reason: 'إنشاء رابط دخول من لوحة تحكم VORTEX'
+            reason: 'إنشاء رابط دخول من لوحة تحكم BOT'
         }).catch(() => null);
         if (invite) return { url: invite.url, channelName: channel.name };
     }
@@ -1220,7 +1203,7 @@ app.get('/manage/:guildId/welcome', checkAuth, async (req, res) => {
     res.send(ui(g, 'welcome', content));
 });
 
-app.post('/generate/:guildId/welcome-random', checkAuth, checkDashboardOwner, checkBotGuildAccess, async (req, res) => {
+app.post('/generate/:guildId/welcome-random', checkAuth, checkBotGuildAccess, async (req, res) => {
     try {
         const filename = `welcome-generated-${req.params.guildId}-${Date.now()}-${Math.floor(Math.random() * 100000)}.png`;
         const absolutePath = path.join(__dirname, 'uploads', filename);
@@ -1978,7 +1961,7 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
                     .setAuthor({ name: `اقتراح من ${msg.author.username}`, iconURL: authorAvatar })
                     .setDescription(content || '*بدون نص*')
                     .setColor(0xd4af37)
-                    .setFooter({ text: 'VORTEX  - Suggestions' })
+                    .setFooter({ text: 'BOT - Suggestions' })
                     .setTimestamp()
                     .addFields(
                         { name: getEmojiDisplay(msg.guild, sugCfg.emoji1), value: '0', inline: true },
@@ -2612,7 +2595,7 @@ client.on('guildMemberAdd', async (member) => {
             .setDescription(welcomeMsg)
             .setColor(0xd4af37)
             .setTimestamp()
-            .setFooter({ text: `VORTEX  - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
+            .setFooter({ text: `BOT - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
 
         try {
             const canvas = createCanvas(800, 400);
@@ -3000,7 +2983,7 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle(title)
                     .setDescription(text)
                     .setColor(0xd4af37)
-                    .setFooter({ text: `VORTEX  - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
+                    .setFooter({ text: `BOT - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
                     .setTimestamp();
                 if (image) embed.setImage(image.url);
 
@@ -3051,7 +3034,7 @@ client.on('interactionCreate', async (interaction) => {
                         { name: 'عدد الرتب', value: `${g.roles.cache.size}`, inline: true },
                         { name: 'تاريخ الإنشاء', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:D>`, inline: true },
                     )
-                    .setFooter({ text: 'VORTEX ' })
+                    .setFooter({ text: 'BOT' })
                     .setTimestamp();
                 return interaction.reply({ embeds: [embed] });
             }
@@ -3458,7 +3441,7 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
             )
             .setThumbnail(interaction.user.displayAvatarURL())
             .setTimestamp()
-            .setFooter({ text: 'VORTEX  - Tickets' });
+            .setFooter({ text: 'BOT - Tickets' });
 
         if (tConfig.topImagePath && fs.existsSync(tConfig.topImagePath)) {
             const topName = path.basename(tConfig.topImagePath);
@@ -3516,7 +3499,7 @@ async function fetchKickChannel(username) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
-        const headers = { Accept: 'application/json', 'User-Agent': 'VORTEX-Bot/2.0' };
+        const headers = { Accept: 'application/json', 'User-Agent': 'BOT/2.0' };
         for (const version of ['v2', 'v1']) {
             const response = await fetch(`https://kick.com/api/${version}/channels/${encodeURIComponent(username)}`, {
                 headers, signal: controller.signal
@@ -3835,7 +3818,7 @@ async function registerSlashCommands() {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     try {
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        console.log('[VORTEX ] Slash commands registered.');
+        console.log('[BOT] Slash commands registered.');
     } catch (err) {
         console.error('[Slash Register Error]', err);
     }
@@ -3846,9 +3829,9 @@ async function registerSlashCommands() {
 // ==========================================
 
 client.once('ready', async () => {
-    console.log(`[VORTEX ] Bot is online as ${client.user.tag}`);
+    console.log(`[BOT] Bot is online as ${client.user.tag}`);
     client.user.setPresence({
-        activities: [{ name: 'VORTEX ', type: ActivityType.Watching }],
+        activities: [{ name: 'BOT', type: ActivityType.Watching }],
         status: 'online'
     });
 
@@ -3876,10 +3859,10 @@ client.once('ready', async () => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`[VORTEX ] Dashboard running on port ${PORT}`);
+    console.log(`[BOT] Dashboard running on port ${PORT}`);
 });
 
 client.login(process.env.TOKEN).catch(err => {
-    console.error('[VORTEX ] Login failed:', err);
+    console.error('[BOT] Login failed:', err);
     process.exit(1);
 });
