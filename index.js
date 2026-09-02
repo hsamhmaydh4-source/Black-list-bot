@@ -39,14 +39,14 @@ const AdminCmdConfig = mongoose.model('AdminCmdConfig', new mongoose.Schema({
 
 const KickConfig = mongoose.model('KickConfig', new mongoose.Schema({
     guildId: String,
-    categoryNotifications: { type: Boolean, default: false },
     streamers: [{
         kickUsername: String,
         channelId: String,
         roleId: String,
         customMessage: String,
         isLive: { type: Boolean, default: false },
-        lastCategoryName: { type: String, default: null }
+        lastCategoryName: { type: String, default: null },
+        categoryAlerts: { type: Boolean, default: true }
     }]
 }));
 
@@ -71,18 +71,6 @@ const UserLevel = mongoose.model('UserLevel', new mongoose.Schema({
     level: { type: Number, default: 1 },
     msgCount: { type: Number, default: 0 }
 }));
-
-const LevelBackup = mongoose.model('LevelBackup', new mongoose.Schema({
-    guildId: { type: String, required: true, index: true },
-    resetBy: { type: String, required: true },
-    resetAt: { type: Date, default: Date.now },
-    levels: [{
-        userId: { type: String, required: true },
-        xp: { type: Number, default: 0 },
-        level: { type: Number, default: 1 },
-        msgCount: { type: Number, default: 0 }
-    }]
-}, { timestamps: false }));
 
 const ModConfig = mongoose.model('ModConfig', new mongoose.Schema({
     guildId: String,
@@ -214,17 +202,6 @@ const MemberHistory = mongoose.model('MemberHistory', new mongoose.Schema({
     roleName: String,
     executorId: String,
     createdAt: { type: Date, default: Date.now, index: true }
-}, { timestamps: false }));
-
-const InviteRecord = mongoose.model('InviteRecord', new mongoose.Schema({
-    guildId: { type: String, required: true, index: true },
-    inviterId: { type: String, required: true, index: true },
-    invitedUserId: { type: String, required: true, index: true },
-    inviteCode: { type: String, required: true },
-    joinedAt: { type: Date, default: Date.now },
-    leftAt: { type: Date, default: null },
-    currentlyInGuild: { type: Boolean, default: true },
-    createdAt: { type: Date, default: Date.now }
 }, { timestamps: false }));
 
 const Suggestion = mongoose.model('Suggestion', new mongoose.Schema({
@@ -607,7 +584,7 @@ passport.use(new Strategy({
 }, (accessToken, refreshToken, profile, done) => done(null, profile)));
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'بوت خاص -secret-key-2026',
+    secret: process.env.SESSION_SECRET || 'VORTEX -secret-key-2026',
     resave: false,
     saveUninitialized: false
 }));
@@ -620,18 +597,35 @@ const checkAuth = (req, res, next) => {
     res.redirect('/login');
 };
 
+const checkDashboardOwner = (req, res, next) => {
+    const ownerId = String(process.env.DASHBOARD_OWNER_ID || '').trim();
+    if (!ownerId) return res.status(500).send('DASHBOARD_OWNER_ID غير مضبوط في متغيرات البيئة.');
+    if (String(req.user?.id || '') !== ownerId) return res.status(403).send('هذا الحساب غير مخول لدخول لوحة التحكم.');
+    next();
+};
 
 const checkBotGuildAccess = (req, res, next) => {
     if (!client.guilds.cache.has(req.params.guildId)) return res.status(404).send('البوت غير موجود في هذا السيرفر.');
     next();
 };
 
+const checkGuildAccess = (req, res, next) => {
+    const guildId = req.params.guildId;
+    const guild = req.user?.guilds?.find(g => g.id === guildId);
+    if (!guild) return res.status(403).send('ليس لديك صلاحية إدارة هذا السيرفر.');
+    try {
+        const permissions = BigInt(guild.permissions || 0);
+        if ((permissions & 8n) !== 8n && (permissions & 32n) !== 32n) return res.status(403).send('تحتاج إلى صلاحية إدارة السيرفر أو Administrator.');
+    } catch { return res.status(403).send('صلاحيات السيرفر غير صالحة.'); }
+    next();
+};
 
-// Any authenticated Discord user may access the dashboard.
-// The bot must still be present in the selected guild.
-app.use('/manage/:guildId', checkAuth, checkBotGuildAccess);
-app.use('/save/:guildId', checkAuth, checkBotGuildAccess);
-app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess);
+// The dashboard owner may view and configure every guild where the bot is present.
+// Discord permissions are still checked separately before each bot action.
+app.use('/manage/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
+app.use('/save/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
+app.use('/delete-kick/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
+app.use('/toggle-kick-category/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
 
 app.get('/auth/discord', passport.authenticate('discord'));
 app.get('/callback', passport.authenticate('discord', { failureRedirect: '/login' }), (req, res) => {
@@ -643,9 +637,54 @@ app.get('/logout', (req, res) => {
 });
 
 app.get('/login', (req, res) => {
-    res.send(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>بوت خاص | تسجيل الدخول</title><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet"><style>
-:root{--bg:#060817;--surface:#0d1228;--line:rgba(142,155,255,.18);--text:#f6f7ff;--muted:#9ba5c7;--violet:#8b5cf6;--cyan:#22d3ee;--pink:#f472b6}*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:Cairo,sans-serif;color:var(--text);background:var(--bg)}body{overflow:hidden}.aurora{position:fixed;inset:0;overflow:hidden;background:radial-gradient(circle at 15% 15%,rgba(139,92,246,.25),transparent 32%),radial-gradient(circle at 88% 78%,rgba(34,211,238,.18),transparent 30%)}.aurora:before,.aurora:after{content:'';position:absolute;border-radius:50%;filter:blur(8px);animation:float 14s ease-in-out infinite alternate}.aurora:before{width:420px;height:420px;right:-130px;top:-120px;background:linear-gradient(135deg,rgba(244,114,182,.25),rgba(139,92,246,.08))}.aurora:after{width:360px;height:360px;left:-100px;bottom:-120px;background:rgba(34,211,238,.13);animation-delay:-4s}.login-wrap{position:relative;z-index:1;width:min(1120px,calc(100% - 42px));min-height:650px;margin:28px auto;display:grid;grid-template-columns:1.2fr .8fr;border:1px solid var(--line);border-radius:32px;overflow:hidden;background:rgba(9,14,35,.78);box-shadow:0 34px 120px rgba(0,0,0,.42);backdrop-filter:blur(24px)}.showcase{padding:60px;display:flex;flex-direction:column;justify-content:space-between;background:linear-gradient(145deg,rgba(139,92,246,.16),transparent 48%,rgba(34,211,238,.08));border-left:1px solid var(--line)}.mini{font-family:'Space Grotesk',sans-serif;color:var(--cyan);letter-spacing:3px;font-size:11px;font-weight:700}.showcase h1{font-size:clamp(58px,8vw,116px);line-height:.95;margin:20px 0;background:linear-gradient(135deg,#fff 22%,#c4b5fd 52%,#67e8f9);-webkit-background-clip:text;color:transparent}.showcase p{max-width:500px;color:var(--muted);font-size:15px;line-height:2}.orbit{position:absolute;width:330px;height:330px;left:9%;top:25%;border:1px solid rgba(103,232,249,.25);border-radius:50%;animation:spin 19s linear infinite}.orbit:before{content:'';position:absolute;width:12px;height:12px;right:12px;top:50%;border-radius:50%;background:var(--cyan);box-shadow:0 0 28px 8px rgba(34,211,238,.7)}.pills{display:flex;gap:10px;flex-wrap:wrap;margin-top:32px}.pills span{padding:8px 12px;border:1px solid var(--line);border-radius:999px;color:#c8d0ed;background:rgba(255,255,255,.035);font-size:10px}.access{padding:60px 48px;display:flex;flex-direction:column;justify-content:center;background:rgba(5,8,23,.65)}.logo{width:72px;height:72px;display:grid;place-items:center;border-radius:24px;color:#fff;font-size:32px;font-weight:900;background:linear-gradient(135deg,var(--violet),var(--cyan));box-shadow:0 18px 46px rgba(34,211,238,.2);margin-bottom:28px}.access h2{font-size:30px;margin:0 0 8px}.access p{color:var(--muted);font-size:13px;line-height:1.95;margin:0 0 28px}.discord-btn{display:flex;align-items:center;justify-content:center;gap:12px;min-height:58px;border-radius:16px;text-decoration:none;color:#07101e;font-weight:900;background:linear-gradient(100deg,#67e8f9,#c4b5fd 50%,#f0abfc);transition:.25s;box-shadow:0 16px 34px rgba(139,92,246,.18)}.discord-btn:hover{transform:translateY(-4px);box-shadow:0 22px 44px rgba(34,211,238,.24)}.secure{color:#7180a5;font-size:10px;margin-top:19px;text-align:center}@keyframes float{to{transform:translate(28px,-22px) scale(1.08)}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:780px){body{overflow:auto}.login-wrap{display:flex;flex-direction:column;min-height:0;margin:14px auto}.showcase{padding:38px 25px 30px;min-height:330px}.showcase h1{font-size:60px}.orbit{width:220px;height:220px;left:-70px;top:90px}.access{padding:35px 25px 42px}}
-</style></head><body><div class="aurora"></div><main class="login-wrap"><section class="showcase"><div><span class="mini">PRIVATE BOT / CONTROL ROOM</span><h1>تحكم<br>بمزاجك.</h1><p>واجهة تشغيل عصرية لمتابعة كل سيرفرات البوت، فحص الإعدادات، وإدارة الأنظمة من مكان واحد.</p><div class="pills"><span>LIVE MONITORING</span><span>SMART CONTROL</span><span>DISCORD READY</span></div></div><div class="orbit"></div></section><section class="access"><div class="logo">ب</div><span class="mini">SECURE ACCESS</span><h2>نبدأ الجولة؟</h2><p>سجّل دخولك بحساب Discord للوصول إلى غرفة التحكم الخاصة بالبوت.</p><a class="discord-btn" href="/auth/discord">المتابعة عبر Discord <b>←</b></a><div class="secure">مصادقة رسمية عبر Discord · لا نحفظ بيانات الدخول</div></section></main></body></html>`);
+    res.send(`<!doctype html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VORTEX · الدخول</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#08070f;--panel:#12111f;--panel-2:#181729;--violet:#8b6bff;--violet-2:#5b3df0;--cyan:#38e8d4;--red:#f0554d;--text:#f3f1fb;--muted:#948fb3;--line:rgba(139,107,255,.22)}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--violet-2) #0c0b16}*::-webkit-scrollbar{width:8px}*::-webkit-scrollbar-track{background:#0c0b16}*::-webkit-scrollbar-thumb{background:linear-gradient(var(--violet),var(--violet-2));border-radius:20px}*::-webkit-scrollbar-button{display:none}
+body{margin:0;min-height:100vh;background:var(--ink);color:var(--text);font-family:'Tajawal',sans-serif;display:grid;place-items:center;overflow:hidden}
+body:before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 18%,rgba(139,107,255,.22),transparent 32%),radial-gradient(circle at 82% 78%,rgba(56,232,212,.14),transparent 30%),radial-gradient(circle at 50% 100%,rgba(91,61,240,.16),transparent 40%),linear-gradient(160deg,#08070f,#0d0c1a 55%,#08070f)}
+body:after{content:'';position:fixed;inset:0;pointer-events:none;opacity:.5;background-image:radial-gradient(rgba(139,107,255,.13) 1px,transparent 1px);background-size:26px 26px;mask-image:radial-gradient(circle at 50% 40%,#000,transparent 72%)}
+.orb{position:fixed;border-radius:50%;filter:blur(3px);pointer-events:none;opacity:.55;animation:float 9s ease-in-out infinite}
+.orb1{width:10px;height:10px;background:var(--cyan);top:18%;left:14%;box-shadow:0 0 24px var(--cyan)}
+.orb2{width:7px;height:7px;background:var(--violet);top:70%;left:82%;box-shadow:0 0 20px var(--violet);animation-delay:1.4s}
+.orb3{width:5px;height:5px;background:#fff;top:30%;left:78%;box-shadow:0 0 14px #fff;animation-delay:2.6s}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-18px)}}
+.login-shell{position:relative;z-index:1;width:min(420px,calc(100% - 36px));padding:46px 40px 38px;background:linear-gradient(180deg,rgba(24,23,41,.86),rgba(14,13,24,.9));border:1px solid var(--line);border-radius:26px;backdrop-filter:blur(22px);box-shadow:0 30px 90px rgba(0,0,0,.55),inset 0 1px rgba(255,255,255,.04);text-align:center}
+.mark{width:64px;height:64px;margin:0 auto 22px;position:relative;display:grid;place-items:center;border-radius:20px;background:conic-gradient(from 220deg,var(--violet),var(--cyan),var(--violet-2),var(--violet));box-shadow:0 16px 40px rgba(139,107,255,.35)}
+.mark:before{content:'';position:absolute;inset:3px;border-radius:17px;background:var(--panel)}
+.mark svg{position:relative;z-index:1;width:28px;height:28px}
+.micro{color:var(--cyan);font:700 10px 'JetBrains Mono',monospace;letter-spacing:3px;margin-bottom:6px}
+.login-shell h1{margin:0 0 6px;font-size:26px;font-weight:800}
+.login-shell>p{color:var(--muted);font-size:12.5px;line-height:1.9;margin:0 0 26px;max-width:320px;margin-left:auto;margin-right:auto}
+.system-list{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:26px}
+.system-list span{padding:6px 12px;border:1px solid var(--line);border-radius:20px;color:#cbc6e6;font-size:10px;background:rgba(139,107,255,.06);font-family:'JetBrains Mono',monospace}
+.discord-button{display:flex;align-items:center;justify-content:center;gap:11px;width:100%;min-height:54px;border-radius:14px;text-decoration:none;color:#0c0a17;font-weight:800;font-size:14px;background:linear-gradient(100deg,var(--cyan),var(--violet) 60%,var(--violet-2));background-size:180% 100%;box-shadow:0 16px 36px rgba(139,107,255,.28);transition:.3s}
+.discord-button svg{width:21px;height:21px;fill:#0c0a17}
+.discord-button:hover{transform:translateY(-2px);background-position:100% 0;box-shadow:0 20px 44px rgba(56,232,212,.28)}
+.secure-note{display:flex;gap:7px;align-items:center;justify-content:center;color:#77729a;font-size:10px;margin-top:18px}
+.secure-note i{width:6px;height:6px;border-radius:50%;background:#4be39a;box-shadow:0 0 10px #4be39a}
+.corner-mark{margin-top:26px;color:#4c4870;font:600 9px 'JetBrains Mono',monospace;letter-spacing:1.5px}
+@media(max-width:480px){.login-shell{padding:36px 24px 30px;border-radius:20px}}
+</style>
+</head>
+<body>
+<i class="orb orb1"></i><i class="orb orb2"></i><i class="orb orb3"></i>
+<main class="login-shell">
+    <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg></div>
+    <div class="micro">VORTEX / CONTROL CENTER</div>
+    <h1>أهلًا بك في مركز التحكم</h1>
+    <p>سجّل الدخول بحساب Discord المصرّح له للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p>
+    <div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div>
+    <a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a>
+    <div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div>
+    <div class="corner-mark">SYSTEM ONLINE · BUILD 3.0</div>
+</main>
+</body></html>`);
 });
 
 app.get('/ping', (req, res) => res.send('I am alive!'));
@@ -656,31 +695,52 @@ app.get('/', (req, res) => res.redirect('/dashboard'));
 // ==========================================
 function ui(guild, active, content) {
     const guildId = guild?.id || '';
-    const guildName = guild?.name || 'كل السيرفرات';
+    const guildName = guild?.name || 'مساحة الإدارة';
     const safe = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[ch]));
     const nav = guildId ? [
-        ['home','نظرة عامة',`/manage/${guildId}/home`,'<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/>'],
-        ['serverinvite','رابط السيرفر',`/manage/${guildId}/serverinvite`,'<circle cx="8" cy="12" r="3"/><circle cx="16" cy="12" r="3"/><path d="M11 12h2"/>'],
-        ['security','الحماية',`/manage/${guildId}/security`,'<path d="M12 3 20 7v5c0 4.5-3 7.4-8 9-5-1.6-8-4.5-8-9V7z"/><path d="m9 12 2 2 4-4"/>'],
-        ['kick','تنبيهات Kick',`/manage/${guildId}/kick`,'<path d="M4 13a8 8 0 1 0 16 0"/><path d="M12 5v7l4 2"/>'],
-        ['admincmds','الأوامر الإدارية',`/manage/${guildId}/admincmds`,'<path d="m6 7 3-3 3 3-3 3zM12 17l3-3 3 3-3 3zM14 7h6M4 17h6"/>'],
-        ['suggestions','الاقتراحات',`/manage/${guildId}/suggestions`,'<path d="M20 11a7 7 0 0 1-7 7H8l-4 3v-6a7 7 0 1 1 16-4z"/><path d="M8 11h.01M12 11h.01M16 11h.01"/>'],
-        ['logs','السجلات',`/manage/${guildId}/logs`,'<path d="M6 3h9l3 3v15H6z"/><path d="M9 11h6M9 15h4M9 7h3"/>'],
-        ['tickets','التذاكر',`/manage/${guildId}/tickets`,'<path d="M4 7h16v10H4z"/><path d="M8 7v3M16 7v3M8 14h8"/>'],
-        ['autoreply','الردود الآلية',`/manage/${guildId}/autoreply`,'<path d="M4 5h16v11H8l-4 3z"/><path d="M8 9h8M8 12h5"/>'],
-        ['levels','نظام المستويات',`/manage/${guildId}/levels`,'<path d="M5 19V9M12 19V5M19 19v-8"/><path d="M3 19h18"/>'],
-        ['welcome','الترحيب',`/manage/${guildId}/welcome`,'<path d="M12 3 20 7v5c0 4.5-3 7.4-8 9-5-1.6-8-4.5-8-9V7z"/><path d="m9 12 2 2 4-4"/>'],
-        ['giveaway','الهدايا',`/manage/${guildId}/giveaway`,'<path d="M4 10h16v10H4zM3 7h18v3H3zM12 7v13"/><path d="M12 7H8a2 2 0 1 1 2-2c2 0 2 2 2 2z"/>'],
-        ['roles','الرتب',`/manage/${guildId}/roles`,'<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 0 1 5 2M17 20h4"/>'],
-        ['mod','الإشراف',`/manage/${guildId}/mod`,'<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'],
-        ['massban','تبنيد الأشخاص',`/manage/${guildId}/massban`,'<circle cx="12" cy="12" r="8"/><path d="M8 12h8"/>'],
-        ['channelswipe','حذف الرومات',`/manage/${guildId}/channelswipe`,'<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>']
+        ['home', 'نظرة عامة', `/manage/${guildId}/home`, '<path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/>'],
+        ['serverinvite', 'رابط السيرفر', `/manage/${guildId}/serverinvite`, '<path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.2-1.2"/><path d="m8 16 8-8"/>'],
+        ['security', 'الحماية', `/manage/${guildId}/security`, '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6z"/><path d="m9 12 2 2 4-4"/>'],
+        ['kick', 'تنبيهات Kick', `/manage/${guildId}/kick`, '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'],
+        ['admincmds', 'الأوامر الإدارية', `/manage/${guildId}/admincmds`, '<path d="m4 7 4-4 4 4-4 4zM12 17l4-4 4 4-4 4zM14 7h6M4 17h6"/>'],
+        ['suggestions', 'الاقتراحات', `/manage/${guildId}/suggestions`, '<path d="M20 11a7 7 0 0 1-7 7H8l-4 3v-6a7 7 0 1 1 16-4z"/>'],
+        ['logs', 'السجلات', `/manage/${guildId}/logs`, '<path d="M6 3h9l3 3v15H6z"/><path d="M9 11h6M9 15h6M9 7h3"/>'],
+        ['tickets', 'التذاكر', `/manage/${guildId}/tickets`, '<path d="M4 7h16v10H4z"/><path d="M8 7v10M16 7v10"/>'],
+        ['autoreply', 'الردود الآلية', `/manage/${guildId}/autoreply`, '<path d="M4 5h16v11H8l-4 3z"/><path d="M8 9h8M8 12h5"/>'],
+        ['levels', 'نظام المستويات', `/manage/${guildId}/levels`, '<path d="M5 19V9M12 19V5M19 19v-8"/>'],
+        ['welcome', 'الترحيب', `/manage/${guildId}/welcome`, '<path d="M12 21s-8-4.5-8-10V5l8-3 8 3v6c0 5.5-8 10-8 10z"/><path d="m9 12 2 2 4-4"/>'],
+        ['giveaway', 'الهدايا', `/manage/${guildId}/giveaway`, '<path d="M4 10h16v10H4zM3 7h18v3H3zM12 7v13M12 7H8a2 2 0 1 1 2-2c2 0 2 2 2 2z"/>'],
+        ['roles', 'الرتب', `/manage/${guildId}/roles`, '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 0 1 5 2M17 20h4"/>'],
+        ['mod', 'الإشراف', `/manage/${guildId}/mod`, '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'],
+        ['massban', 'تبنيد الأشخاص', `/manage/${guildId}/massban`, '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6z"/><path d="M8 12h8"/>'],
+        ['channelswipe', 'حذف جميع الرومات', `/manage/${guildId}/channelswipe`, '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>']
     ] : [];
-    const navHtml = nav.map(([key,label,href,icon]) => `<a class="nav-item ${active === key ? 'active' : ''}" href="${href}"><svg viewBox="0 0 24 24">${icon}</svg><span>${label}</span><i></i></a>`).join('');
-    return `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${safe(guildName)} · بوت خاص</title><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet"><style>
-:root{--bg:#070a18;--panel:#0c1125;--panel2:#111936;--line:rgba(143,156,255,.16);--violet:#8b5cf6;--cyan:#22d3ee;--pink:#f472b6;--text:#f6f7ff;--muted:#96a1c4;--danger:#fb7185;--shadow:0 25px 80px rgba(0,0,0,.28);--rail:278px}*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#6043b5 #080b1a}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Cairo,sans-serif}body{overflow-x:hidden}body:before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 80% 5%,rgba(139,92,246,.16),transparent 25%),radial-gradient(circle at 10% 90%,rgba(34,211,238,.09),transparent 26%);z-index:-2}body:after{content:'';position:fixed;inset:0;pointer-events:none;opacity:.16;background-image:linear-gradient(rgba(160,174,255,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(160,174,255,.08) 1px,transparent 1px);background-size:48px 48px;mask-image:linear-gradient(to bottom,#000,transparent 88%);z-index:-1}.app{min-height:100vh}.rail{position:fixed;z-index:20;inset:0 0 0 auto;width:var(--rail);padding:22px 15px 16px;background:linear-gradient(180deg,rgba(12,17,38,.97),rgba(7,10,24,.98));border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-18px 0 70px rgba(0,0,0,.22);transition:.3s ease}.brand{display:flex;align-items:center;gap:12px;padding:4px 9px 24px;border-bottom:1px solid var(--line)}.brand-mark{width:43px;height:43px;display:grid;place-items:center;border-radius:15px;background:linear-gradient(135deg,var(--violet),var(--cyan));color:#081022;font-weight:900;font-size:19px;box-shadow:0 12px 30px rgba(34,211,238,.18)}.brand strong{display:block;font-size:18px}.brand small{display:block;color:#7481a8;font:700 9px 'Space Grotesk',sans-serif;letter-spacing:2px;margin-top:3px}.rail-section{color:#6f7aa0;font:700 10px 'Space Grotesk',sans-serif;letter-spacing:2px;margin:25px 10px 10px}.rail-nav{display:flex;flex-direction:column;gap:5px;overflow:auto;padding:2px 2px 12px}.nav-item{position:relative;min-height:43px;display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid transparent;border-radius:14px;text-decoration:none;color:#9da8c7;font-size:12px;font-weight:700;transition:.22s}.nav-item svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}.nav-item i{width:5px;height:5px;margin-right:auto;border-radius:50%;background:transparent}.nav-item:hover{color:#fff;background:rgba(139,92,246,.1);transform:translateX(-4px)}.nav-item.active{color:#fff;background:linear-gradient(90deg,rgba(139,92,246,.28),rgba(34,211,238,.07));border-color:rgba(139,92,246,.28);box-shadow:inset -3px 0 var(--cyan),0 12px 25px rgba(0,0,0,.12)}.nav-item.active i{background:var(--cyan);box-shadow:0 0 12px var(--cyan)}.rail-footer{margin-top:auto;border-top:1px solid var(--line);padding:15px 10px 0;color:#8290b7;font-size:10px}.rail-footer a{float:left;color:var(--pink);text-decoration:none}.workspace{margin-right:var(--rail);min-height:100vh}.topbar{height:78px;display:flex;align-items:center;gap:18px;padding:0 clamp(18px,4vw,58px);border-bottom:1px solid var(--line);background:rgba(7,10,24,.64);backdrop-filter:blur(16px);position:sticky;top:0;z-index:10}.menu-btn{display:none;border:1px solid var(--line);background:var(--panel2);color:#fff;border-radius:12px;font-size:20px;width:42px;height:42px}.crumb{display:flex;flex-direction:column;gap:3px;min-width:0}.crumb span{font:700 9px 'Space Grotesk',sans-serif;letter-spacing:2px;color:#7784aa}.crumb b{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.top-status{margin-right:auto;display:flex;align-items:center;gap:8px;color:#9ba5c7;font-size:11px}.status-dot{width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 14px #34d399}.top-actions{display:flex;gap:8px}.top-actions a{width:38px;height:38px;display:grid;place-items:center;border-radius:12px;border:1px solid var(--line);color:#aab5d5;text-decoration:none;transition:.2s}.top-actions a:hover{color:#fff;border-color:var(--cyan);transform:translateY(-2px)}.content{padding:34px clamp(18px,4vw,64px) 70px;max-width:1500px;margin:auto}.welcome-strip{display:flex;align-items:end;justify-content:space-between;gap:20px;padding:30px 32px;margin-bottom:24px;border:1px solid rgba(139,92,246,.24);border-radius:24px;background:linear-gradient(115deg,rgba(139,92,246,.2),rgba(34,211,238,.08) 52%,rgba(244,114,182,.07));box-shadow:var(--shadow);overflow:hidden;position:relative}.welcome-strip:after{content:'';position:absolute;width:230px;height:230px;border:1px solid rgba(103,232,249,.18);border-radius:50%;left:-40px;bottom:-150px;box-shadow:0 0 0 25px rgba(103,232,249,.04),0 0 0 50px rgba(103,232,249,.03)}.eyebrow{font:700 10px 'Space Grotesk',sans-serif;color:#67e8f9;letter-spacing:2px}.welcome-strip h1{margin:8px 0 4px;font-size:clamp(24px,4vw,42px)}.welcome-strip p{margin:0;color:#b2bbd5;font-size:13px}.welcome-meta{position:relative;z-index:1;color:#a5b4fc;font:700 10px 'Space Grotesk',sans-serif;letter-spacing:1px}.view{animation:rise .5s ease both}.card{background:linear-gradient(145deg,rgba(16,24,53,.88),rgba(10,15,34,.92));border:1px solid var(--line);border-radius:20px;padding:25px;margin-bottom:20px;box-shadow:0 18px 55px rgba(0,0,0,.18);animation:rise .45s ease both}.card:before{content:'';display:block;width:46px;height:3px;background:linear-gradient(90deg,var(--violet),var(--cyan));border-radius:99px;margin:-25px 0 22px}.card h2,.card h3{margin-top:0}.card h3{font-size:17px}.btn-save{background:linear-gradient(135deg,var(--violet),#4f46e5)!important;color:#fff!important;border:0;border-radius:12px;padding:13px 20px;font-weight:800;cursor:pointer;transition:.2s;box-shadow:0 10px 22px rgba(99,102,241,.18)}.btn-save:hover{transform:translateY(-2px);filter:brightness(1.12)}input,select,textarea{width:100%;background:rgba(7,11,28,.82);border:1px solid var(--line);color:#fff;border-radius:12px;padding:12px;font-family:Cairo;font-size:12px}input:focus,select:focus,textarea:focus{outline:0;border-color:var(--cyan);box-shadow:0 0 0 3px rgba(34,211,238,.1)}label{display:block;color:#9da8c7;font-size:11px;margin:12px 0 6px}.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:18px}.guild-card{position:relative;overflow:hidden;background:linear-gradient(150deg,rgba(17,25,57,.96),rgba(9,14,32,.96));border:1px solid var(--line);border-radius:22px;padding:22px;transition:.3s;animation:rise .5s ease both}.guild-card:before{content:'';position:absolute;inset:auto -30px -60px auto;width:150px;height:150px;border-radius:50%;background:rgba(139,92,246,.16);filter:blur(18px)}.guild-card:hover{transform:translateY(-8px) scale(1.01);border-color:rgba(103,232,249,.5);box-shadow:0 26px 55px rgba(0,0,0,.28)}.guild-top{display:flex;align-items:center;gap:14px;margin-bottom:22px;position:relative}.guild-icon{width:62px;height:62px;border-radius:20px;border:1px solid rgba(103,232,249,.3);box-shadow:0 10px 22px rgba(0,0,0,.25)}.guild-card h3{margin:0;font-size:15px}.members{margin:4px 0 0;color:#8390b5;font-size:10px}.guild-card a{position:relative;display:flex;align-items:center;justify-content:center;gap:7px;background:linear-gradient(135deg,rgba(139,92,246,.9),rgba(6,182,212,.74));color:#fff;text-decoration:none;border-radius:12px;padding:11px;font-size:11px;font-weight:900}.empty{padding:34px;border:1px dashed var(--line);border-radius:18px;color:var(--muted);text-align:center}@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}@media(max-width:850px){.rail{transform:translateX(110%)}.rail.is-open{transform:translateX(0)}.workspace{margin-right:0}.menu-btn{display:grid;place-items:center}.drawer-backdrop{display:block!important;position:fixed;inset:0;background:rgba(0,0,0,.56);z-index:19;opacity:0;pointer-events:none;transition:.25s}.drawer-backdrop.is-open{opacity:1;pointer-events:auto}.topbar{padding:0 16px}.content{padding:22px 14px 50px}.welcome-strip{padding:24px;align-items:flex-start;flex-direction:column}.top-status{display:none}}.drawer-backdrop{display:none}
-</style></head><body><div class="app"><aside class="rail" id="rail"><div class="brand"><div class="brand-mark">ب</div><div><strong>بوت خاص</strong><small>PRIVATE CONTROL</small></div></div>${guildId ? '<div class="rail-section">WORKSPACE</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${safe(guildName)}<a href="/logout">خروج</a></div></aside><div class="drawer-backdrop" id="backdrop"></div><section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>PRIVATE BOT / CONTROL ROOM</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> متصل الآن</div><div class="top-actions"><a href="/dashboard" title="كل السيرفرات">⌂</a><a href="/logout" title="خروج">↪</a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE SPACE</div><h1>${safe(guildName)}</h1><p>تحكم وفحص كل الأنظمة من واجهة واحدة.</p></div><div class="welcome-meta">LIVE · ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section></div><script>(()=>{const r=document.getElementById('rail'),b=document.getElementById('backdrop'),m=document.getElementById('menuBtn');if(!r||!b||!m)return;const c=()=>{r.classList.remove('is-open');b.classList.remove('is-open')};m.onclick=()=>{r.classList.toggle('is-open');b.classList.toggle('is-open')};b.onclick=c;addEventListener('keydown',e=>e.key==='Escape'&&c())})();</script></body></html>`;
+    const navHtml = nav.map(([key, label, href, path]) => `<a class="rail-link ${active === key ? 'is-active' : ''}" href="${href}" aria-current="${active === key ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${path}</svg><span>${label}</span><i></i></a>`).join('');
+    return `<!doctype html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${safe(guildName)} · VORTEX</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#08070f;--panel:#12111f;--panel-2:#181729;--panel-3:#1e1d34;--line:rgba(139,107,255,.18);--line-strong:rgba(139,107,255,.4);--gold:#8b6bff;--gold-2:#5b3df0;--cyan:#38e8d4;--red:#f0554d;--red-soft:rgba(240,85,77,.14);--muted:#948fb3;--text-muted:#948fb3;--text:#f3f1fb;--gold-border:rgba(139,107,255,.18);--gold-glow:rgba(139,107,255,.35);--dark:#08070f;--shadow:0 22px 70px rgba(0,0,0,.45);--rail:272px}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--gold-2) #0b0a15}*::-webkit-scrollbar{width:9px;height:9px}*::-webkit-scrollbar-track{background:#0b0a15;border-radius:12px}*::-webkit-scrollbar-thumb{background:linear-gradient(180deg,var(--gold),var(--gold-2));border:2px solid #0b0a15;border-radius:12px}*::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg,var(--cyan),var(--gold))}*::-webkit-scrollbar-button{display:none;width:0;height:0}html{background:var(--ink);overflow-x:hidden}body{margin:0;background:radial-gradient(circle at 15% 8%,rgba(139,107,255,.09),transparent 30%),radial-gradient(circle at 90% 80%,rgba(56,232,212,.06),transparent 26%),var(--ink);color:var(--text);font-family:'Tajawal',sans-serif;min-height:100vh}body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.22;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#000,transparent 88%)}a{color:inherit}.app{min-height:100vh}.rail{position:fixed;z-index:20;inset:0 0 0 auto;width:var(--rail);padding:24px 16px 18px;background:linear-gradient(180deg,rgba(24,23,41,.98),rgba(10,9,17,.98));border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-16px 0 50px rgba(0,0,0,.3)}.brand{display:flex;align-items:center;gap:11px;padding:4px 9px 23px;border-bottom:1px solid var(--line)}.brand-mark{width:40px;height:40px;position:relative;display:grid;place-items:center;border-radius:13px;background:conic-gradient(from 220deg,var(--gold),var(--cyan),var(--gold-2),var(--gold));box-shadow:0 10px 25px rgba(139,107,255,.28)}.brand-mark:before{content:'';position:absolute;inset:2px;border-radius:11px;background:#151329}.brand-mark svg{position:relative;z-index:1;width:19px;height:19px}.brand strong{display:block;font-size:19px;letter-spacing:2px;line-height:1}.brand small{display:block;color:var(--muted);font-size:9px;letter-spacing:2px;margin-top:5px;font-family:'JetBrains Mono',monospace}.rail-section{color:#5f5a82;font:600 10px 'JetBrains Mono',monospace;letter-spacing:1px;margin:25px 10px 9px;text-transform:uppercase}.rail-nav{display:flex;flex-direction:column;gap:4px;overflow:auto;padding:2px 3px 10px 2px;scrollbar-width:thin;scrollbar-color:var(--gold-2) transparent}.rail-nav::-webkit-scrollbar{width:6px}.rail-nav::-webkit-scrollbar-track{background:transparent}.rail-nav::-webkit-scrollbar-thumb{border:0;background:linear-gradient(180deg,var(--gold),var(--gold-2))}.rail-nav::-webkit-scrollbar-button{display:none}.rail-link{min-height:43px;display:flex;align-items:center;gap:12px;padding:9px 11px;border:1px solid transparent;border-radius:12px;text-decoration:none;color:#a29cc2;font-size:12px;font-weight:600;transition:.2s ease}.rail-link svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}.rail-link i{width:5px;height:5px;border-radius:50%;margin-right:auto;background:transparent}.rail-link:hover{background:rgba(139,107,255,.09);color:var(--text);transform:translateX(-3px)}.rail-link.is-active{background:linear-gradient(90deg,rgba(139,107,255,.2),rgba(56,232,212,.05));border-color:var(--line);color:var(--cyan);box-shadow:inset -3px 0 var(--gold)}.rail-link.is-active i{background:var(--cyan);box-shadow:0 0 12px var(--cyan)}.rail-footer{margin-top:auto;padding:15px 10px 0;border-top:1px solid var(--line);color:var(--muted);font-size:10px}.rail-footer a{color:var(--red);text-decoration:none;float:left}.workspace{margin-right:var(--rail);min-width:0}.topbar{height:78px;padding:0 42px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);background:rgba(10,9,17,.72);backdrop-filter:blur(18px);position:sticky;top:0;z-index:10}.menu-btn{display:none;border:1px solid var(--line);background:var(--panel);color:var(--gold);border-radius:11px;width:42px;height:42px;font-size:20px}.crumb{color:var(--muted);font:500 11px 'JetBrains Mono',monospace;letter-spacing:.5px}.crumb b{display:block;color:var(--text);font:700 18px 'Tajawal',sans-serif;margin-top:2px}.top-status{margin-right:auto;display:flex;align-items:center;gap:8px;color:#b6b0d4;font-size:11px}.status-dot{width:7px;height:7px;border-radius:50%;background:#43e0a0;box-shadow:0 0 12px #43e0a0}.top-actions{display:flex;gap:8px}.top-actions a{display:grid;place-items:center;width:38px;height:38px;border:1px solid var(--line);border-radius:10px;color:var(--muted);text-decoration:none;background:rgba(255,255,255,.02)}.top-actions a:hover{color:var(--cyan);border-color:var(--line-strong)}.content{padding:38px 42px 60px;max-width:1500px;margin:auto}.welcome-strip{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:30px;padding:31px 34px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(110deg,rgba(139,107,255,.14),rgba(19,17,32,.9) 45%),var(--panel);box-shadow:var(--shadow);position:relative;overflow:hidden}.welcome-strip:after{content:'V';position:absolute;left:27px;top:-42px;color:rgba(139,107,255,.08);font:900 180px 'JetBrains Mono',monospace}.eyebrow{color:var(--cyan);font:600 10px 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase}.welcome-strip h1{margin:8px 0 3px;font-size:29px;letter-spacing:-.5px}.welcome-strip p{margin:0;color:var(--muted);font-size:12px}.welcome-meta{position:relative;z-index:1;text-align:left;color:var(--muted);font:500 10px 'JetBrains Mono',monospace}.view{min-width:0}.card{background:linear-gradient(145deg,rgba(30,29,52,.9),rgba(15,14,25,.94));border:1px solid var(--line);border-radius:18px;padding:25px;margin-bottom:20px;box-shadow:0 12px 40px rgba(0,0,0,.22)}.card:hover{border-color:var(--line-strong)}.card h3{display:flex;align-items:center;gap:10px;margin:0 0 20px;font-size:16px;color:var(--text)}.card h3 svg{width:19px;color:var(--gold)}label{display:block;color:#b3ade0;font-size:12px;margin:15px 0 7px}input,select,textarea{width:100%;padding:12px 14px;color:var(--text);background:#0d0c17;border:1px solid rgba(255,255,255,.09);border-radius:10px;outline:0;font:500 13px 'Tajawal',sans-serif;transition:.2s}input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(139,107,255,.14)}textarea{min-height:105px;resize:vertical}.btn-save{border:0;border-radius:10px;padding:12px 21px;background:linear-gradient(135deg,var(--gold),var(--cyan));color:#0c0a17;font:800 12px 'Tajawal',sans-serif;cursor:pointer;box-shadow:0 8px 20px rgba(139,107,255,.18);transition:.2s}.btn-save:hover{transform:translateY(-2px);filter:brightness(1.08)}.btn-danger{background:var(--red)!important;color:#fff!important}.tag{display:inline-flex;align-items:center;border-radius:20px;padding:4px 9px;font-size:10px}.tag-blue{background:rgba(139,107,255,.14);color:var(--gold);border:1px solid var(--line)}.tag-red{background:var(--red-soft);color:#f5928c;border:1px solid rgba(240,85,77,.2)}.data-table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid var(--line);border-radius:13px;font-size:12px}.data-table th{background:rgba(139,107,255,.09);color:var(--gold);font-size:10px;text-align:right;padding:13px}.data-table td{padding:13px;border-top:1px solid rgba(255,255,255,.055);color:#cac5e6}.data-table-wrap{overflow:auto}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-box{padding:20px;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.02)}.stat-num{color:var(--gold);font:800 28px 'JetBrains Mono',monospace}.stat-label{color:var(--muted);font-size:11px;margin-top:5px}.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.guild-card{padding:21px;border:1px solid var(--line);border-radius:17px;background:var(--panel);transition:.2s}.guild-card:hover{transform:translateY(-4px);border-color:var(--gold)}.guild-icon{width:48px;height:48px;border-radius:14px;object-fit:cover;margin-bottom:14px}.guild-card h3{margin:0 0 12px;font-size:15px}.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.06)}.toggle-row input[type=checkbox]{width:19px;height:19px;accent-color:var(--gold)}.drawer-backdrop{display:none}
+@media(max-width:950px){:root{--rail:245px}.content{padding:28px 24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.rail{transform:translateX(110%);transition:transform .25s ease;width:min(300px,88vw);box-shadow:-25px 0 80px rgba(0,0,0,.5)}.rail.is-open{transform:translateX(0)}.workspace{margin-right:0}.menu-btn{display:block}.topbar{height:67px;padding:0 15px}.top-status,.top-actions a:first-child{display:none}.crumb b{font-size:15px}.content{padding:18px 13px 35px}.welcome-strip{display:block;padding:22px 20px}.welcome-strip h1{font-size:23px}.welcome-meta{text-align:right;margin-top:16px}.stats-grid{grid-template-columns:1fr 1fr;gap:9px}.stat-box{padding:15px}.stat-num{font-size:21px}.card{padding:18px 14px;border-radius:14px}.drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:15}.drawer-backdrop.is-open{display:block}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="rail" id="rail"><div class="brand"><div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg></div><div><strong>VORTEX</strong><small>CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
+<div class="drawer-backdrop" id="backdrop"></div>
+<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>VORTEX / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg></a><a href="/logout" title="تسجيل الخروج"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
+</div>
+<script>
+(() => { const rail=document.getElementById('rail'), backdrop=document.getElementById('backdrop'), btn=document.getElementById('menuBtn'); if(!rail||!backdrop||!btn)return; const close=()=>{rail.classList.remove('is-open');backdrop.classList.remove('is-open')}; btn.addEventListener('click',()=>{rail.classList.toggle('is-open');backdrop.classList.toggle('is-open')}); backdrop.addEventListener('click',close); window.addEventListener('keydown',e=>{if(e.key==='Escape')close()}); })();
+</script>
+</body></html>`;
 }
+
 // --- [ Dashboard - Admin Commands ] ---
 app.get('/manage/:guildId/admincmds', checkAuth, async (req, res) => {
     const g = client.guilds.cache.get(req.params.guildId);
@@ -759,66 +819,52 @@ app.post('/save/:guildId/admincmds', checkAuth, async (req, res) => {
 // ==========================================
 
 // --- [ Dashboard - Server List ] ---
-app.get('/dashboard', checkAuth, (req, res) => {
-    const botGuilds = [...client.guilds.cache.values()].sort((a,b) => a.name.localeCompare(b.name, 'ar'));
-    const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[ch]));
-    const cards = botGuilds.map((g, index) => {
-        const iconURL = g.iconURL({ extension:'png', size:256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
-        return `<article class="guild-card" data-name="${esc(g.name).toLowerCase()}" style="animation-delay:${Math.min(index * 45, 500)}ms"><div class="guild-top"><img src="${iconURL}" class="guild-icon" alt="${esc(g.name)}"><div><h3>${esc(g.name)}</h3><p class="members">${g.memberCount || 0} عضو · البوت متصل</p></div></div><a href="/manage/${g.id}/home">فتح غرفة التحكم <span>←</span></a></article>`;
-    }).join('') || '<div class="empty">لا توجد سيرفرات متاحة حاليًا.</div>';
-    const content = `<section class="server-hero"><div><div class="eyebrow">BOT NETWORK / ${botGuilds.length} SERVERS</div><h1>كل مساحاتك<br><span>بمكان واحد.</span></h1><p>تقدر تدخل وتفحص أي سيرفر موجود فيه البوت، بدون الاعتماد على صلاحيات حسابك في Discord.</p></div><div class="hero-orb"><b>${botGuilds.length}</b><small>سيرفر متصل</small></div></section><section class="server-toolbar"><div><b>اختيار السيرفر</b><span> اختر مساحة العمل التي تريد فحصها</span></div><label class="search-box"><span>⌕</span><input type="search" id="guildSearch" placeholder="ابحث باسم السيرفر..." oninput="filterGuilds()"></label></section><div class="guild-grid" id="guildGrid">${cards}</div><script>function filterGuilds(){const q=document.getElementById('guildSearch').value.trim().toLowerCase();document.querySelectorAll('#guildGrid .guild-card').forEach(c=>c.style.display=c.dataset.name.includes(q)?'':'none')}</script>`;
-    const shell = ui({id:null,name:'كل السيرفرات'}, 'home', content);
-    res.send(shell.replace('</style></head>', `.server-hero{display:flex;align-items:center;justify-content:space-between;gap:25px;padding:34px;margin-bottom:20px;border:1px solid rgba(139,92,246,.28);border-radius:26px;background:linear-gradient(120deg,rgba(139,92,246,.2),rgba(34,211,238,.08));overflow:hidden;position:relative}.server-hero h1{font-size:clamp(34px,6vw,72px);line-height:1.02;margin:12px 0}.server-hero h1 span{color:#67e8f9}.server-hero p{max-width:580px;color:#b4bedb;font-size:13px;line-height:2;margin:0}.hero-orb{width:150px;height:150px;border-radius:50%;display:grid;place-items:center;align-content:center;flex:none;background:radial-gradient(circle,rgba(34,211,238,.28),rgba(139,92,246,.12) 52%,transparent 70%);border:1px solid rgba(103,232,249,.28);box-shadow:0 0 0 18px rgba(103,232,249,.035),0 0 0 36px rgba(139,92,246,.025);animation:pulse 3s ease-in-out infinite}.hero-orb b{font-size:38px}.hero-orb small{color:#9ba8ca;font-size:10px}.server-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:22px 0}.server-toolbar b{font-size:16px}.server-toolbar span{color:#7f8caf;font-size:11px}.search-box{display:flex;align-items:center;gap:10px;max-width:360px;width:100%;margin:0}.search-box span{color:#67e8f9;font-size:20px}.search-box input{margin:0}@keyframes pulse{50%{transform:scale(1.06);box-shadow:0 0 0 24px rgba(103,232,249,.03),0 0 0 48px rgba(139,92,246,.02)}}@media(max-width:650px){.server-hero{align-items:flex-start;flex-direction:column}.hero-orb{width:110px;height:110px}.hero-orb b{font-size:28px}.server-toolbar{align-items:flex-start;flex-direction:column}.search-box{max-width:none}}`+'</style></head>'), 1);
-    res.send(shell);
-});
-// --- [ Home / Stats ] ---
-const inviteCache = new Map();
+app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
+    const botGuilds = [...client.guilds.cache.values()];
+    const cards = botGuilds.map(g => {
+        const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
+        return `<div class="guild-card"><img src="${iconURL}" class="guild-icon" alt="${g.name}"><h3>${g.name}</h3><a href="/manage/${g.id}/home" class="guild-card-link">إدارة السيرفر<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></a></div>`;
+    }).join('');
 
-async function fetchGuildInvites(guild) {
-    try {
-        const invites = await guild.invites.fetch();
-        const snapshot = new Map();
-        for (const invite of invites.values()) snapshot.set(invite.code, {
-            uses: invite.uses || 0,
-            inviterId: invite.inviter?.id || null,
-            inviterTag: invite.inviter?.tag || invite.inviter?.username || null
-        });
-        inviteCache.set(guild.id, snapshot);
-        return snapshot;
-    } catch (error) {
-        console.error(`[Invite Fetch Error] ${guild.id}:`, error.message);
-        return inviteCache.get(guild.id) || new Map();
-    }
-}
-
-async function attributeMemberInvite(member) {
-    const guild = member.guild;
-    const previous = inviteCache.get(guild.id) || new Map();
-    const current = await fetchGuildInvites(guild);
-    let usedInvite = null;
-    for (const [code, invite] of current) {
-        const before = previous.get(code);
-        if (invite.uses > (before?.uses || 0)) {
-            usedInvite = { code, ...invite };
-            break;
+    const content = `
+    <div style="text-align:center; margin-bottom:40px;">
+        <div style="width:56px;height:56px;margin:0 auto 18px;position:relative;display:grid;place-items:center;border-radius:18px;background:conic-gradient(from 220deg,var(--gold),var(--cyan),var(--gold-2),var(--gold));box-shadow:0 14px 34px rgba(139,107,255,.3);">
+            <div style="position:absolute;inset:2px;border-radius:15px;background:#12111f;"></div>
+            <svg style="position:relative;z-index:1;" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg>
+        </div>
+        <div style="font-size:44px; font-weight:800; letter-spacing:6px;
+            background: linear-gradient(135deg, var(--gold), var(--cyan) 55%, #fff);
+            -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+            margin-bottom:10px;">VORTEX</div>
+        <p style="color:var(--text-muted); font-size:15px;">اختر السيرفر لإدارته</p>
+        <div style="margin-top:20px; max-width:400px; margin-left:auto; margin-right:auto; position:relative;">
+            <input type="text" id="guildSearch" placeholder="ابحث عن سيرفر..." onkeyup="filterGuilds()" style="text-align:center; border-radius:20px; background:rgba(139,107,255,.06); border:1px solid var(--gold-border);">
+        </div>
+    </div>
+    <div class="guild-grid" id="guildGrid">${cards}</div>
+    <style>.guild-card{display:flex;flex-direction:column}.guild-card-link{margin-top:auto;display:inline-flex;align-items:center;gap:6px;color:var(--cyan);font-size:12px;font-weight:700;text-decoration:none;padding-top:6px}.guild-card-link svg{transition:.2s}.guild-card:hover .guild-card-link svg{transform:translateX(-3px)}</style>
+    <script>
+        function filterGuilds() {
+            const input = document.getElementById('guildSearch');
+            const filter = input.value.toLowerCase();
+            const grid = document.getElementById('guildGrid');
+            const cards = grid.getElementsByClassName('guild-card');
+            for (let i = 0; i < cards.length; i++) {
+                const h3 = cards[i].getElementsByTagName('h3')[0];
+                const txtValue = h3.textContent || h3.innerText;
+                if (txtValue.toLowerCase().indexOf(filter) > -1) {
+                    cards[i].style.display = "";
+                } else {
+                    cards[i].style.display = "none";
+                }
+            }
         }
-    }
-    if (!usedInvite?.inviterId || usedInvite.inviterId === member.id) return null;
-    await InviteRecord.findOneAndUpdate(
-        { guildId: guild.id, invitedUserId: member.id },
-        { $set: { inviterId: usedInvite.inviterId, inviteCode: usedInvite.code, joinedAt: new Date(), leftAt: null, currentlyInGuild: true } },
-        { upsert: true, setDefaultsOnInsert: true }
-    );
-    return usedInvite;
-}
+    </script>`;
 
-async function markInviteMemberPresent(guildId, userId, present) {
-    await InviteRecord.updateOne(
-        { guildId, invitedUserId: userId },
-        { $set: { currentlyInGuild: present, ...(present ? { leftAt: null } : { leftAt: new Date() }) } }
-    ).catch(() => {});
-}
+    res.send(ui({ id: null, name: 'قائمة السيرفرات' }, 'home', content));
+});
 
+// --- [ Home / Stats ] ---
 async function createGuildInvite(guild) {
     const botMember = guild.members.me || await guild.members.fetch(client.user.id).catch(() => null);
     if (!botMember) return null;
@@ -831,7 +877,7 @@ async function createGuildInvite(guild) {
             maxAge: 0,
             maxUses: 0,
             unique: false,
-            reason: 'إنشاء رابط دخول من لوحة تحكم بوت خاص'
+            reason: 'إنشاء رابط دخول من لوحة تحكم VORTEX'
         }).catch(() => null);
         if (invite) return { url: invite.url, channelName: channel.name };
     }
@@ -912,6 +958,11 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
         <td style="color:var(--text-muted);">#${g.channels.cache.get(st.channelId)?.name || 'قناة محذوفة'}</td>
         <td>${st.roleId ? `<span class="tag tag-red">@${g.roles.cache.get(st.roleId)?.name || 'رتبة محذوفة'}</span>` : '<span class="tag" style="background:rgba(255,255,255,0.05);color:var(--text-muted);">بدون منشن</span>'}</td>
         <td>
+            <a href="/toggle-kick-category/${g.id}/${i}" style="text-decoration:none;" title="${st.categoryAlerts === false ? 'تفعيل تنبيهات تغيير الكاتيقوري' : 'إيقاف تنبيهات تغيير الكاتيقوري'}">
+                <span class="tag ${st.categoryAlerts === false ? '' : 'tag-blue'}" style="cursor:pointer; ${st.categoryAlerts === false ? 'background:rgba(255,255,255,0.05);color:var(--text-muted);' : ''}">${st.categoryAlerts === false ? 'كاتيقوري: متوقف' : 'كاتيقوري: مفعّل'}</span>
+            </a>
+        </td>
+        <td>
             <a href="/delete-kick/${g.id}/${i}" class="btn-save btn-danger btn-sm" style="text-decoration:none;" onclick="return confirm('حذف الستريمر؟')">حذف</a>
         </td>
     </tr>`).join('');
@@ -925,9 +976,7 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
 
         <div style="background:rgba(0,0,0,0.3); border:1px solid var(--gold-border); border-radius:14px; padding:24px; margin-bottom:24px;">
             <h4 style="color:var(--gold); margin-bottom:18px; font-size:15px;">اضافة ستريمر جديد</h4>
-            <div class="category-alert-panel"><div><span class="eyebrow">إعدادات التنبيهات</span><h4>تنبيهات تغيّر الكاتيجوري</h4><p>عند تفعيلها، يرسل البوت تنبيهًا إذا تغيّر تصنيف بث الستريمر أثناء البث.</p></div><form method="POST" action="/save/${g.id}/kick-settings" class="category-toggle-form"><input type="hidden" name="categoryNotifications" value="0"><label class="category-switch"><input type="checkbox" name="categoryNotifications" value="1" ${s.categoryNotifications ? 'checked' : ''} onchange="this.form.submit()"><span></span><b>${s.categoryNotifications ? 'مفعّلة' : 'متوقفة'}</b></label></form></div>
-
-<form method="POST" action="/save/${g.id}/kick">
+            <form method="POST" action="/save/${g.id}/kick">
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
                     <div>
                         <label>اسم المستخدم في Kick</label>
@@ -951,6 +1000,10 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
                         <input type="text" name="msg" placeholder="%name% بدأ البث الآن!">
                     </div>
                 </div>
+                <div class="toggle-row" style="margin-top:16px;">
+                    <label style="color:white; margin:0;">تفعيل تنبيه تغيير الكاتيقوري لهذا الستريمر</label>
+                    <input type="checkbox" name="categoryAlerts" checked style="width:20px; height:20px; accent-color:var(--gold); cursor:pointer;">
+                </div>
                 <button class="btn-save btn-green" style="margin-top:16px; width:auto; padding:12px 30px;">اضافة الستريمر</button>
             </form>
         </div>
@@ -962,6 +1015,7 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
                     <th>الستريمر</th>
                     <th>القناة</th>
                     <th>المنشن</th>
+                    <th>تنبيه الكاتيقوري</th>
                     <th>الإجراء</th>
                 </tr>
             </thead>
@@ -972,30 +1026,31 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
     res.send(ui(g, 'kick', content));
 });
 
-app.post('/save/:guildId/kick-settings', checkAuth, async (req, res) => {
-    const { guildId } = req.params;
-    await KickConfig.findOneAndUpdate(
-        { guildId },
-        { $set: { guildId, categoryNotifications: req.body.categoryNotifications === '1' } },
-        { upsert: true }
-    );
-    res.redirect(`/manage/${guildId}/kick`);
-});
-
 app.post('/save/:guildId/kick', checkAuth, async (req, res) => {
     try {
         const { guildId } = req.params;
-        const { kickUser, channelId, roleId, msg } = req.body;
+        const { kickUser, channelId, roleId, msg, categoryAlerts } = req.body;
         const username = kickUser.replace('https://kick.com', '').replace('/', '').trim();
         await KickConfig.findOneAndUpdate(
             { guildId },
-            { $push: { streamers: { kickUsername: username, channelId, roleId, customMessage: msg, isLive: false } } },
+            { $push: { streamers: { kickUsername: username, channelId, roleId, customMessage: msg, isLive: false, categoryAlerts: categoryAlerts === 'on' } } },
             { upsert: true }
         );
         res.redirect(`/manage/${guildId}/kick`);
     } catch (err) {
         res.status(500).send('خطأ في إضافة الستريمر');
     }
+});
+
+app.get('/toggle-kick-category/:guildId/:index', checkAuth, async (req, res) => {
+    const { guildId, index } = req.params;
+    const config = await KickConfig.findOne({ guildId });
+    if (config && config.streamers[index]) {
+        config.streamers[index].categoryAlerts = config.streamers[index].categoryAlerts === false ? true : false;
+        config.markModified('streamers');
+        await config.save();
+    }
+    res.redirect(`/manage/${guildId}/kick`);
 });
 
 app.get('/delete-kick/:guildId/:index', checkAuth, async (req, res) => {
@@ -1165,7 +1220,7 @@ app.get('/manage/:guildId/welcome', checkAuth, async (req, res) => {
     res.send(ui(g, 'welcome', content));
 });
 
-app.post('/generate/:guildId/welcome-random', checkAuth, checkBotGuildAccess, async (req, res) => {
+app.post('/generate/:guildId/welcome-random', checkAuth, checkDashboardOwner, checkBotGuildAccess, async (req, res) => {
     try {
         const filename = `welcome-generated-${req.params.guildId}-${Date.now()}-${Math.floor(Math.random() * 100000)}.png`;
         const absolutePath = path.join(__dirname, 'uploads', filename);
@@ -1923,7 +1978,7 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
                     .setAuthor({ name: `اقتراح من ${msg.author.username}`, iconURL: authorAvatar })
                     .setDescription(content || '*بدون نص*')
                     .setColor(0xd4af37)
-                    .setFooter({ text: 'بوت خاص  - Suggestions' })
+                    .setFooter({ text: 'VORTEX  - Suggestions' })
                     .setTimestamp()
                     .addFields(
                         { name: getEmojiDisplay(msg.guild, sugCfg.emoji1), value: '0', inline: true },
@@ -2523,7 +2578,6 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 });
 client.on('guildMemberAdd', async (member) => {
     try {
-        const usedInvite = await attributeMemberInvite(member).catch(() => null);
         // إحصائيات
         await Stats.findOneAndUpdate(
             { guildId: member.guild.id },
@@ -2537,8 +2591,7 @@ client.on('guildMemberAdd', async (member) => {
             { name: 'العضو', value: logUser(member), inline: true },
             { name: 'معرّف العضو', value: member.id, inline: true },
             { name: 'إنشاء الحساب', value: accountCreated, inline: true },
-{ name: 'عدد أعضاء السيرفر', value: String(member.guild.memberCount), inline: true },
-            ...(usedInvite ? [{ name: 'الدعوة المستخدمة', value: `\`${usedInvite.code}\` بواسطة <@${usedInvite.inviterId}>`, inline: true }] : [])
+            { name: 'عدد أعضاء السيرفر', value: String(member.guild.memberCount), inline: true }
         ] });
         await sendLog(member.guild, 'members', logEmbed);
 
@@ -2559,7 +2612,7 @@ client.on('guildMemberAdd', async (member) => {
             .setDescription(welcomeMsg)
             .setColor(0xd4af37)
             .setTimestamp()
-            .setFooter({ text: `بوت خاص  - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
+            .setFooter({ text: `VORTEX  - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
 
         try {
             const canvas = createCanvas(800, 400);
@@ -2605,7 +2658,6 @@ const background = await loadImage(bgUrl ).catch(() => loadImage('https://placeh
 });
 
 client.on('guildMemberRemove', async (member) => {
-    await markInviteMemberPresent(member.guild.id, member.id, false);
     const kick = await findRecentExecutor(member.guild, AuditLogEvent.MemberKick, member.id);
     const embed = buildLogEmbed({ title: kick ? 'طرد عضو' : 'خروج عضو', color: LOG_COLORS.danger, guild: member.guild, actor: kick, target: member, thumbnail: member.user?.displayAvatarURL?.(), fields: [
         { name: 'العضو', value: logUser(member), inline: true },
@@ -2771,103 +2823,6 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.editReply({ embeds: [embed], components: [historyButtons(user.id, null, 0)] });
             }
         
-            if (interaction.commandName === 'resetlevels') {
-                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-                    return interaction.reply({ content: 'هذا الأمر مخصص للإدارة العليا فقط.', ephemeral: true });
-                }
-                await interaction.deferReply({ ephemeral: true });
-                const existingLevels = await UserLevel.find({ guildId: interaction.guild.id }).lean();
-                if (!existingLevels.length) {
-                    return interaction.editReply({ content: 'لا توجد بيانات مستويات حتى يتم تصفيرها.' });
-                }
-                await LevelBackup.findOneAndUpdate(
-                    { guildId: interaction.guild.id },
-                    {
-                        $set: {
-                            resetBy: interaction.user.id,
-                            resetAt: new Date(),
-                            levels: existingLevels.map(row => ({
-                                userId: row.userId,
-                                xp: row.xp || 0,
-                                level: row.level || 1,
-                                msgCount: row.msgCount || 0
-                            }))
-                        }
-                    },
-                    { upsert: true, setDefaultsOnInsert: true }
-                );
-                await UserLevel.deleteMany({ guildId: interaction.guild.id });
-                const embed = new EmbedBuilder()
-                    .setTitle('تم تصفير المستويات')
-                    .setDescription(`تم تصفير مستويات **${existingLevels.length}** عضو، وحُفظت نسخة احتياطية يمكن استرجاعها بواسطة \`/restorelevels\`.`)
-                    .setColor(0xe67e22)
-                    .setFooter({ text: `بواسطة ${interaction.user.tag}` })
-                    .setTimestamp();
-                return interaction.editReply({ embeds: [embed] });
-            }
-
-            if (interaction.commandName === 'restorelevels') {
-                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-                    return interaction.reply({ content: 'هذا الأمر مخصص للإدارة العليا فقط.', ephemeral: true });
-                }
-                await interaction.deferReply({ ephemeral: true });
-                const backup = await LevelBackup.findOne({ guildId: interaction.guild.id }).lean();
-                if (!backup?.levels?.length) {
-                    return interaction.editReply({ content: 'لا توجد نسخة احتياطية محفوظة لهذا السيرفر.' });
-                }
-                await UserLevel.deleteMany({ guildId: interaction.guild.id });
-                await UserLevel.insertMany(backup.levels.map(row => ({
-                    guildId: interaction.guild.id,
-                    userId: row.userId,
-                    xp: row.xp || 0,
-                    level: row.level || 1,
-                    msgCount: row.msgCount || 0
-                })), { ordered: false });
-                const embed = new EmbedBuilder()
-                    .setTitle('تم استرجاع المستويات')
-                    .setDescription(`تم استرجاع مستويات **${backup.levels.length}** عضو كما كانت قبل آخر تصفير.`)
-                    .setColor(0x2ecc71)
-                    .addFields({ name: 'تاريخ النسخة', value: `<t:${Math.floor(new Date(backup.resetAt).getTime() / 1000)}:F>`, inline: true })
-                    .setFooter({ text: 'هذه هي آخر نسخة احتياطية محفوظة.' })
-                    .setTimestamp();
-                return interaction.editReply({ embeds: [embed] });
-            }
-
-            if (interaction.commandName === 'invites') {
-                const inviter = interaction.options.getUser('user', true);
-                await interaction.deferReply();
-                const records = await InviteRecord.find({ guildId: interaction.guild.id, inviterId: inviter.id })
-                    .sort({ joinedAt: -1 }).lean();
-                const memberIds = records.map(record => record.invitedUserId);
-                const currentMembers = new Set();
-                for (const id of memberIds) {
-                    if (interaction.guild.members.cache.has(id)) currentMembers.add(id);
-                    else if (await interaction.guild.members.fetch(id).catch(() => null)) currentMembers.add(id);
-                }
-                const joined = records.length;
-                const stillHere = records.filter(record => currentMembers.has(record.invitedUserId)).length;
-                const left = joined - stillHere;
-                const details = records.length
-                    ? records.slice(0, 20).map(record => {
-                        const isHere = currentMembers.has(record.invitedUserId);
-                        return `${isHere ? '✅' : '❌'} <@${record.invitedUserId}> — ${isHere ? 'موجود حالياً' : 'غادر السيرفر'}\nالدعوة: \`${record.inviteCode}\` | الدخول: <t:${Math.floor(new Date(record.joinedAt).getTime() / 1000)}:d>`;
-                    }).join('\n\n')
-                    : 'لا توجد دعوات مسجلة لهذا العضو منذ تشغيل نظام التتبع.';
-                const embed = new EmbedBuilder()
-                    .setTitle(`إحصائيات دعوات ${inviter.tag}`)
-                    .setDescription(`العضو: <@${inviter.id}>\n\n**تفاصيل آخر ${Math.min(records.length, 20)} دعوة:**\n${details}`)
-                    .setThumbnail(inviter.displayAvatarURL({ dynamic: true }))
-                    .setColor(0xd4af37)
-                    .addFields(
-                        { name: 'إجمالي من دخلوا بدعواته', value: `\`${joined}\``, inline: true },
-                        { name: 'ما زالوا في السيرفر', value: `\`${stillHere}\``, inline: true },
-                        { name: 'غادروا السيرفر', value: `\`${left}\``, inline: true }
-                    )
-                    .setFooter({ text: 'يتم تسجيل الدعوات الجديدة تلقائياً عبر قاعدة البيانات.' })
-                    .setTimestamp();
-                return interaction.editReply({ embeds: [embed] });
-            }
-
             if (interaction.commandName === 'setbanner') {
                 const image = interaction.options.getAttachment('image');
                 await GuildConfig.findOneAndUpdate(
@@ -3045,7 +3000,7 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle(title)
                     .setDescription(text)
                     .setColor(0xd4af37)
-                    .setFooter({ text: `بوت خاص  - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
+                    .setFooter({ text: `VORTEX  - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
                     .setTimestamp();
                 if (image) embed.setImage(image.url);
 
@@ -3096,7 +3051,7 @@ client.on('interactionCreate', async (interaction) => {
                         { name: 'عدد الرتب', value: `${g.roles.cache.size}`, inline: true },
                         { name: 'تاريخ الإنشاء', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:D>`, inline: true },
                     )
-                    .setFooter({ text: 'بوت خاص ' })
+                    .setFooter({ text: 'VORTEX ' })
                     .setTimestamp();
                 return interaction.reply({ embeds: [embed] });
             }
@@ -3503,7 +3458,7 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
             )
             .setThumbnail(interaction.user.displayAvatarURL())
             .setTimestamp()
-            .setFooter({ text: 'بوت خاص  - Tickets' });
+            .setFooter({ text: 'VORTEX  - Tickets' });
 
         if (tConfig.topImagePath && fs.existsSync(tConfig.topImagePath)) {
             const topName = path.basename(tConfig.topImagePath);
@@ -3561,7 +3516,7 @@ async function fetchKickChannel(username) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
-        const headers = { Accept: 'application/json', 'User-Agent': 'بوت خاص' };
+        const headers = { Accept: 'application/json', 'User-Agent': 'VORTEX-Bot/2.0' };
         for (const version of ['v2', 'v1']) {
             const response = await fetch(`https://kick.com/api/${version}/channels/${encodeURIComponent(username)}`, {
                 headers, signal: controller.signal
@@ -3654,8 +3609,8 @@ const categorySlug = categorySource?.slug || null;
                         streamer.lastCategoryName = categoryName;
                         streamer.kickUsername = username;
                         changed = true;
-                    } else if (isLive && streamer.isLive && config.categoryNotifications && categoryName && streamer.lastCategoryName && categoryName !== streamer.lastCategoryName) {
-                        const targetChannel = channel?.isTextBased() ? channel : null;
+                    } else if (isLive && streamer.isLive && categoryName && streamer.lastCategoryName && categoryName !== streamer.lastCategoryName) {
+                        const targetChannel = (streamer.categoryAlerts !== false && channel?.isTextBased()) ? channel : null;
                         const categoryUrl = categorySlug ? `https://kick.com/category/${categorySlug}` : `https://kick.com/${username}`;
                         if (targetChannel) {
                             const mention = streamer.roleId ? `<@&${streamer.roleId}>` : undefined;
@@ -3872,13 +3827,6 @@ async function registerSlashCommands() {
         new SlashCommandBuilder().setName('memberhistory').setDescription('عرض سجل عضو كامل')
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
             .addUserOption(o => o.setName('user').setDescription('العضو المطلوب').setRequired(true)),
-        new SlashCommandBuilder().setName('invites').setDescription('عرض إحصائيات دعوات عضو')
-            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-            .addUserOption(o => o.setName('user').setDescription('العضو المطلوب').setRequired(true)),
-        new SlashCommandBuilder().setName('resetlevels').setDescription('تصفير جميع مستويات السيرفر مع حفظ نسخة احتياطية')
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('restorelevels').setDescription('استرجاع المستويات المحفوظة قبل آخر تصفير')
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('emojiinfo').setDescription('عرض معلومات إيموجي')
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageEmojisAndStickers)
             .addStringOption(o => o.setName('emoji').setDescription('ID الإيموجي').setRequired(true)),
@@ -3887,7 +3835,7 @@ async function registerSlashCommands() {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     try {
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        console.log('[بوت خاص ] Slash commands registered.');
+        console.log('[VORTEX ] Slash commands registered.');
     } catch (err) {
         console.error('[Slash Register Error]', err);
     }
@@ -3898,9 +3846,9 @@ async function registerSlashCommands() {
 // ==========================================
 
 client.once('ready', async () => {
-    console.log(`[بوت خاص ] Bot is online as ${client.user.tag}`);
+    console.log(`[VORTEX ] Bot is online as ${client.user.tag}`);
     client.user.setPresence({
-        activities: [{ name: 'بوت خاص ', type: ActivityType.Watching }],
+        activities: [{ name: 'VORTEX ', type: ActivityType.Watching }],
         status: 'online'
     });
 
@@ -3918,7 +3866,6 @@ client.once('ready', async () => {
         console.error('[Jail Resume Error]', err);
     }
 
-    for (const guild of client.guilds.cache.values()) await fetchGuildInvites(guild);
     await registerSlashCommands();
     checkKickLive();
 });
@@ -3929,10 +3876,10 @@ client.once('ready', async () => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`[بوت خاص ] مركز التحكم يعمل on port ${PORT}`);
+    console.log(`[VORTEX ] Dashboard running on port ${PORT}`);
 });
 
 client.login(process.env.TOKEN).catch(err => {
-    console.error('[بوت خاص ] Login failed:', err);
+    console.error('[VORTEX ] Login failed:', err);
     process.exit(1);
 });
