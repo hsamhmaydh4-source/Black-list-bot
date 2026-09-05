@@ -230,6 +230,13 @@ const TicketConfig = mongoose.model('TicketConfig', new mongoose.Schema({
     menuOptions: [{ label: String, emoji: String, adminRole: String, categoryId: String }]
 }));
 
+const NamePanelConfig = mongoose.model('NamePanelConfig', new mongoose.Schema({
+    guildId: String,
+    channelId: String,
+    emojiId: String,
+    imagePath: String
+}));
+
 // ==========================================
 // 2. Express App Setup
 // ==========================================
@@ -692,6 +699,7 @@ function ui(guild, active, content) {
         ['autoreply', 'الردود الآلية', `/manage/${guildId}/autoreply`, '<path d="M4 5h16v11H8l-4 3z"/><path d="M8 9h8M8 12h5"/>'],
         ['levels', 'نظام المستويات', `/manage/${guildId}/levels`, '<path d="M5 19V9M12 19V5M19 19v-8"/>'],
         ['welcome', 'الترحيب', `/manage/${guildId}/welcome`, '<path d="M12 21s-8-4.5-8-10V5l8-3 8 3v6c0 5.5-8 10-8 10z"/><path d="m9 12 2 2 4-4"/>'],
+        ['namepanel', 'لوحة تغيير الاسم', `/manage/${guildId}/namepanel`, '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>'],
         ['giveaway', 'الهدايا', `/manage/${guildId}/giveaway`, '<path d="M4 10h16v10H4zM3 7h18v3H3zM12 7v13M12 7H8a2 2 0 1 1 2-2c2 0 2 2 2 2z"/>'],
         ['roles', 'الرتب', `/manage/${guildId}/roles`, '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 0 1 5 2M17 20h4"/>'],
         ['mod', 'الإشراف', `/manage/${guildId}/mod`, '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'],
@@ -1240,6 +1248,86 @@ app.post('/save/:guildId/welcome', checkAuth, async (req, res) => {
     if (b.imageUrl?.trim()) updateData['welcome.imagePath'] = b.imageUrl.trim();
     await GuildConfig.findOneAndUpdate({ guildId: req.params.guildId }, { $set: updateData }, { upsert: true });
     res.redirect(`/manage/${req.params.guildId}/welcome`);
+});
+
+// --- [ Name Panel ] ---
+app.get('/manage/:guildId/namepanel', checkAuth, async (req, res) => {
+    const g = client.guilds.cache.get(req.params.guildId);
+    if (!g) return res.redirect('/dashboard');
+    const s = await NamePanelConfig.findOne({ guildId: g.id }) || {};
+
+    const content = `
+    <form method="POST" action="/save/${g.id}/namepanel" enctype="multipart/form-data">
+        <div class="card">
+            <h3>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                لوحة تغيير الاسم
+            </h3>
+            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+                حدد الروم، حط ID الإيموجي اللي بيظهر على الزر، وارفع صورة تظهر داخل الإيمبد. عند الضغط، بيطلع للعضو مودال يكتب فيه اسمه، ويتغير اسمه مباشرة داخل السيرفر.
+                <br><small style="color:#7a7595;">ملاحظة: ديسكورد ما بيدعم لون أسود حقيقي للأزرار، أقرب ستايل متوفر هو الرمادي الغامق (Secondary) وهو المستخدم هون.</small>
+            </p>
+            <label>الروم</label>
+            <select name="channelId" required>
+                <option value="">-- اختر الروم --</option>
+                ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}" ${s.channelId === c.id ? 'selected' : ''}># ${c.name}</option>`).join('')}
+            </select>
+            <label>ID الإيموجي (يظهر على الزر)</label>
+            <input type="text" name="emojiId" value="${s.emojiId || ''}" placeholder="مثلاً: 123456789012345678">
+            <label>صورة الإيمبد</label>
+            <input type="file" name="nameImage" accept="image/*">
+            ${s.imagePath ? `<div style="margin-top:12px;"><img src="/${s.imagePath.replace(/^\.\//,'')}" style="max-width:220px; border-radius:12px; border:1px solid var(--gold-border);"></div>` : ''}
+            <button class="btn-save" style="margin-top:20px;">إرسال</button>
+        </div>
+    </form>`;
+
+    res.send(ui(g, 'namepanel', content));
+});
+
+app.post('/save/:guildId/namepanel', checkAuth, upload.single('nameImage'), async (req, res) => {
+    try {
+        const { guildId } = req.params;
+        const { channelId, emojiId } = req.body;
+        const g = client.guilds.cache.get(guildId);
+        if (!g) return res.status(404).send('السيرفر غير موجود');
+        const channel = g.channels.cache.get(channelId);
+        if (!channel) return res.send('الروم غير موجود');
+
+        const update = { channelId, emojiId: (emojiId || '').trim() };
+        if (req.file) update.imagePath = req.file.path;
+
+        const config = await NamePanelConfig.findOneAndUpdate({ guildId }, { $set: update }, { upsert: true, new: true });
+
+        const embed = new EmbedBuilder()
+            .setTitle('تغيير الاسم')
+            .setDescription('اضغط على الزر بالأسفل وحط اسمك الجديد.')
+            .setColor(0xe74c3c);
+
+        const files = [];
+        const stableImageUrl = config.imagePath ? publicUploadUrl(config.imagePath) : null;
+        if (stableImageUrl) {
+            embed.setImage(stableImageUrl);
+        } else if (config.imagePath && fs.existsSync(config.imagePath)) {
+            const imgName = path.basename(config.imagePath);
+            files.push(new AttachmentBuilder(config.imagePath, { name: imgName }));
+            embed.setImage(`attachment://${imgName}`);
+        }
+
+        const button = new ButtonBuilder()
+            .setCustomId(`namepanel_open:${config._id}`)
+            .setLabel('تغيير الاسم')
+            .setStyle(ButtonStyle.Secondary);
+        if (config.emojiId && /^\d+$/.test(config.emojiId)) {
+            try { button.setEmoji({ id: config.emojiId }); } catch (e) {}
+        }
+
+        await channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)], files }).catch(e => console.error('[NamePanel Send Error]', e));
+
+        res.redirect(`/manage/${guildId}/namepanel`);
+    } catch (err) {
+        console.error('[NamePanel Save Error]', err);
+        res.status(500).send('خطأ في إرسال اللوحة');
+    }
 });
 
 // --- [ Security ] ---
@@ -2757,6 +2845,25 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.reply({ content: 'تم تسجيل دخولك في القيف اواي بنجاح.', ephemeral: true });
             }
             return interaction.reply({ content: 'أنت داخل القيف اواي مسبقًا.', ephemeral: true });
+        }
+
+        // --- [ Name Panel Button/Modal ] ---
+        if (interaction.isButton() && interaction.customId.startsWith('namepanel_open:')) {
+            const configId = interaction.customId.split(':')[1];
+            const modal = new ModalBuilder()
+                .setCustomId(`namepanel_modal:${configId}`)
+                .setTitle('تغيير الاسم');
+            modal.addComponents(new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('new_name').setLabel('اكتب اسمك الجديد').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(32)
+            ));
+            return interaction.showModal(modal);
+        }
+
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('namepanel_modal:')) {
+            const newName = interaction.fields.getTextInputValue('new_name').trim();
+            const setResult = await interaction.member.setNickname(newName).catch(() => null);
+            if (!setResult) return interaction.reply({ content: 'ما قدرت أغيّر اسمك، تأكد إن رتبتي أعلى من رتبتك.', ephemeral: true });
+            return interaction.reply({ content: `تم تغيير اسمك إلى: **${newName}**`, ephemeral: true });
         }
 
         if (interaction.isButton() && interaction.customId.startsWith('memberhistory:')) {
