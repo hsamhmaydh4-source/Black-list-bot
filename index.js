@@ -237,6 +237,15 @@ const NamePanelConfig = mongoose.model('NamePanelConfig', new mongoose.Schema({
     imagePath: String
 }));
 
+const ApplicationConfig = mongoose.model('ApplicationConfig', new mongoose.Schema({
+    guildId: String,
+    channelId: String,
+    resultChannelId: String,
+    title: String,
+    description: String,
+    questions: { type: [String], default: [] }
+}));
+
 // ==========================================
 // 2. Express App Setup
 // ==========================================
@@ -609,17 +618,54 @@ const checkBotGuildAccess = (req, res, next) => {
     next();
 };
 
-// Private bot: any logged-in Discord account can manage any server the bot is in.
-// Logging in through Discord OAuth is the access gate — no per-guild role/permission is required.
-app.use('/manage/:guildId', checkAuth, checkBotGuildAccess);
-app.use('/save/:guildId', checkAuth, checkBotGuildAccess);
-app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess);
-app.use('/toggle-kick-category/:guildId', checkAuth, checkBotGuildAccess);
+// يتأكد إن حساب Discord المسجل دخوله يملك صلاحية Administrator (أو هو مالك السيرفر) داخل هذا السيرفر تحديداً.
+// بدون هذا التحقق، أي حساب مسجل دخول عبر OAuth كان يقدر يدير أي سيرفر البوت موجود فيه.
+async function isGuildAdmin(guild, userId) {
+    try {
+        if (!guild || !userId) return false;
+        if (guild.ownerId === userId) return true;
+        const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+        return !!member?.permissions?.has(PermissionFlagsBits.Administrator);
+    } catch (err) {
+        console.error('[Admin Check Error]', err.message);
+        return false;
+    }
+}
+
+const checkGuildAdmin = async (req, res, next) => {
+    const g = client.guilds.cache.get(req.params.guildId);
+    if (!g) return res.status(404).send('البوت غير موجود في هذا السيرفر.');
+    const allowed = await isGuildAdmin(g, req.user.id);
+    if (!allowed) return res.status(403).send('لا تملك صلاحية الأدمن في هذا السيرفر.');
+    next();
+};
+
+app.use('/manage/:guildId', checkAuth, checkBotGuildAccess, checkGuildAdmin);
+app.use('/save/:guildId', checkAuth, checkBotGuildAccess, checkGuildAdmin);
+app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess, checkGuildAdmin);
+app.use('/toggle-kick-category/:guildId', checkAuth, checkBotGuildAccess, checkGuildAdmin);
 
 
 app.get('/auth/discord', passport.authenticate('discord'));
-app.get('/callback', passport.authenticate('discord', { failureRedirect: '/login' }), (req, res) => {
-    res.redirect('/dashboard');
+app.get('/callback', (req, res, next) => {
+    passport.authenticate('discord', (err, user) => {
+        if (err) {
+            console.error('[Discord OAuth Error]', err.message || err);
+            if (err.oauthError) {
+                console.error('[Discord OAuth Error Details] status:', err.oauthError.statusCode);
+                console.error('[Discord OAuth Error Details] body:', err.oauthError.data);
+            }
+            return res.redirect('/login');
+        }
+        if (!user) return res.redirect('/login');
+        req.logIn(user, (loginErr) => {
+            if (loginErr) {
+                console.error('[Session Login Error]', loginErr);
+                return next(loginErr);
+            }
+            return res.redirect('/dashboard');
+        });
+    })(req, res, next);
 });
 
 app.get('/logout', (req, res) => {
@@ -700,6 +746,7 @@ function ui(guild, active, content) {
         ['levels', 'نظام المستويات', `/manage/${guildId}/levels`, '<path d="M5 19V9M12 19V5M19 19v-8"/>'],
         ['welcome', 'الترحيب', `/manage/${guildId}/welcome`, '<path d="M12 21s-8-4.5-8-10V5l8-3 8 3v6c0 5.5-8 10-8 10z"/><path d="m9 12 2 2 4-4"/>'],
         ['namepanel', 'لوحة تغيير الاسم', `/manage/${guildId}/namepanel`, '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>'],
+        ['applications', 'التقديمات', `/manage/${guildId}/applications`, '<path d="M9 4h6a2 2 0 0 1 2 2v1H7V6a2 2 0 0 1 2-2z"/><rect x="5" y="7" width="14" height="14" rx="2"/><path d="M9 12h6M9 16h4"/>'],
         ['giveaway', 'الهدايا', `/manage/${guildId}/giveaway`, '<path d="M4 10h16v10H4zM3 7h18v3H3zM12 7v13M12 7H8a2 2 0 1 1 2-2c2 0 2 2 2 2z"/>'],
         ['roles', 'الرتب', `/manage/${guildId}/roles`, '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 0 1 5 2M17 20h4"/>'],
         ['mod', 'الإشراف', `/manage/${guildId}/mod`, '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'],
@@ -810,8 +857,10 @@ app.post('/save/:guildId/admincmds', checkAuth, async (req, res) => {
 // ==========================================
 
 // --- [ Dashboard - Server List ] ---
-app.get('/dashboard', checkAuth, (req, res) => {
-    const botGuilds = [...client.guilds.cache.values()];
+app.get('/dashboard', checkAuth, async (req, res) => {
+    const allGuilds = [...client.guilds.cache.values()];
+    const adminFlags = await Promise.all(allGuilds.map(g => isGuildAdmin(g, req.user.id)));
+    const botGuilds = allGuilds.filter((g, i) => adminFlags[i]);
     const cards = botGuilds.map(g => {
         const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
         return `<div class="guild-card"><img src="${iconURL}" class="guild-icon" alt="${g.name}"><h3>${g.name}</h3><a href="/manage/${g.id}/home" class="guild-card-link">إدارة السيرفر<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></a></div>`;
@@ -832,7 +881,7 @@ app.get('/dashboard', checkAuth, (req, res) => {
             <input type="text" id="guildSearch" placeholder="ابحث عن سيرفر..." onkeyup="filterGuilds()" style="text-align:center; border-radius:20px; background:rgba(139,107,255,.06); border:1px solid var(--gold-border);">
         </div>
     </div>
-    <div class="guild-grid" id="guildGrid">${cards}</div>
+    ${botGuilds.length > 0 ? `<div class="guild-grid" id="guildGrid">${cards}</div>` : `<p style="color:var(--text-muted); text-align:center; padding:40px 0;">ما في عندك أي سيرفر فيه البوت وعندك صلاحية Administrator فيه.</p>`}
     <style>.guild-card{display:flex;flex-direction:column}.guild-card-link{margin-top:auto;display:inline-flex;align-items:center;gap:6px;color:var(--cyan);font-size:12px;font-weight:700;text-decoration:none;padding-top:6px}.guild-card-link svg{transition:.2s}.guild-card:hover .guild-card-link svg{transform:translateX(-3px)}</style>
     <script>
         function filterGuilds() {
@@ -1211,7 +1260,7 @@ app.get('/manage/:guildId/welcome', checkAuth, async (req, res) => {
     res.send(ui(g, 'welcome', content));
 });
 
-app.post('/generate/:guildId/welcome-random', checkAuth, checkBotGuildAccess, async (req, res) => {
+app.post('/generate/:guildId/welcome-random', checkAuth, checkBotGuildAccess, checkGuildAdmin, async (req, res) => {
     try {
         const filename = `welcome-generated-${req.params.guildId}-${Date.now()}-${Math.floor(Math.random() * 100000)}.png`;
         const absolutePath = path.join(__dirname, 'uploads', filename);
@@ -1327,6 +1376,90 @@ app.post('/save/:guildId/namepanel', checkAuth, upload.single('nameImage'), asyn
     } catch (err) {
         console.error('[NamePanel Save Error]', err);
         res.status(500).send('خطأ في إرسال اللوحة');
+    }
+});
+
+// --- [ Applications ] ---
+app.get('/manage/:guildId/applications', checkAuth, async (req, res) => {
+    const g = client.guilds.cache.get(req.params.guildId);
+    if (!g) return res.redirect('/dashboard');
+    const s = await ApplicationConfig.findOne({ guildId: g.id }) || { questions: [] };
+    const escapeAttr = (value) => String(value ?? '').replace(/"/g, '&quot;');
+
+    const content = `
+    <form method="POST" action="/save/${g.id}/applications">
+        <div class="card">
+            <h3>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6a2 2 0 0 1 2 2v1H7V6a2 2 0 0 1 2-2z"/><rect x="5" y="7" width="14" height="14" rx="2"/><path d="M9 12h6M9 16h4"/></svg>
+                نظام التقديمات
+            </h3>
+            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+                سمّي الإيمبد واكتب شرحه، اختر الروم اللي بينزل فيه، واكتب 5 أسئلة. عند الإرسال بينزل إيمبد فيه زر "تقديم"، ولما يضغطه أي عضو بيطلعله مودال فيه الأسئلة الخمسة بالضبط ليجاوب عليها.
+            </p>
+            <label>عنوان الإيمبد</label>
+            <input type="text" name="title" value="${escapeAttr(s.title)}" placeholder="مثلاً: تقديم فريق الإدارة" required>
+            <label>شرح الإيمبد</label>
+            <textarea name="description" placeholder="اشرح شروط التقديم هون...">${s.description || ''}</textarea>
+            <label>روم نشر الإيمبد</label>
+            <select name="channelId" required>
+                <option value="">-- اختر الروم --</option>
+                ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}" ${s.channelId === c.id ? 'selected' : ''}># ${c.name}</option>`).join('')}
+            </select>
+            <label>روم استقبال الطلبات (اختياري، لو تركته فاضي بترجع لنفس روم النشر)</label>
+            <select name="resultChannelId">
+                <option value="">-- نفس روم النشر --</option>
+                ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}" ${s.resultChannelId === c.id ? 'selected' : ''}># ${c.name}</option>`).join('')}
+            </select>
+            <div style="color:var(--gold); font-size:13px; font-weight:700; margin:16px 0 10px;">الأسئلة (5 أسئلة)</div>
+            ${[0, 1, 2, 3, 4].map(i => `
+            <label>السؤال ${i + 1}</label>
+            <input type="text" name="q_${i}" value="${escapeAttr(s.questions?.[i])}" placeholder="اكتب السؤال ${i + 1}" required>
+            `).join('')}
+            <button class="btn-save" style="margin-top:20px;">إرسال</button>
+        </div>
+    </form>`;
+
+    res.send(ui(g, 'applications', content));
+});
+
+app.post('/save/:guildId/applications', checkAuth, async (req, res) => {
+    try {
+        const { guildId } = req.params;
+        const { title, description, channelId, resultChannelId } = req.body;
+        const g = client.guilds.cache.get(guildId);
+        if (!g) return res.status(404).send('السيرفر غير موجود');
+        const channel = g.channels.cache.get(channelId);
+        if (!channel) return res.send('الروم غير موجود');
+
+        const questions = [0, 1, 2, 3, 4].map(i => (req.body[`q_${i}`] || '').trim()).filter(Boolean);
+        if (questions.length < 5) return res.send('لازم تكتب كل الأسئلة الخمسة.');
+
+        const update = {
+            channelId,
+            resultChannelId: resultChannelId || '',
+            title: (title || 'تقديم').trim(),
+            description: (description || '').trim(),
+            questions
+        };
+        const config = await ApplicationConfig.findOneAndUpdate({ guildId }, { $set: update }, { upsert: true, new: true });
+
+        const embed = new EmbedBuilder()
+            .setTitle(config.title)
+            .setDescription(config.description || 'اضغط الزر بالأسفل للتقديم.')
+            .setColor(0xd4af37)
+            .setTimestamp();
+
+        const button = new ButtonBuilder()
+            .setCustomId(`application_open:${config._id}`)
+            .setLabel('تقديم')
+            .setStyle(ButtonStyle.Primary);
+
+        await channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] }).catch(e => console.error('[Application Send Error]', e));
+
+        res.redirect(`/manage/${guildId}/applications`);
+    } catch (err) {
+        console.error('[Application Save Error]', err);
+        res.status(500).send('خطأ في إرسال التقديم');
     }
 });
 
@@ -2864,6 +2997,56 @@ client.on('interactionCreate', async (interaction) => {
             const setResult = await interaction.member.setNickname(newName).catch(() => null);
             if (!setResult) return interaction.reply({ content: 'ما قدرت أغيّر اسمك، تأكد إن رتبتي أعلى من رتبتك.', ephemeral: true });
             return interaction.reply({ content: `تم تغيير اسمك إلى: **${newName}**`, ephemeral: true });
+        }
+
+        // --- [ Application Button/Modal ] ---
+        if (interaction.isButton() && interaction.customId.startsWith('application_open:')) {
+            const configId = interaction.customId.split(':')[1];
+            const config = await ApplicationConfig.findById(configId).catch(() => null);
+            if (!config || !config.questions?.length) return interaction.reply({ content: 'تعذر العثور على نظام التقديم أو الأسئلة غير مكتملة.', ephemeral: true });
+
+            const modal = new ModalBuilder()
+                .setCustomId(`application_modal:${configId}`)
+                .setTitle((config.title || 'تقديم').slice(0, 45));
+
+            config.questions.slice(0, 5).forEach((q, i) => {
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId(`answer_${i}`)
+                        .setLabel(q.slice(0, 45) || `السؤال ${i + 1}`)
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                        .setMaxLength(1000)
+                ));
+            });
+
+            return interaction.showModal(modal);
+        }
+
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('application_modal:')) {
+            const configId = interaction.customId.split(':')[1];
+            const config = await ApplicationConfig.findById(configId).catch(() => null);
+            if (!config) return interaction.reply({ content: 'تعذر العثور على نظام التقديم.', ephemeral: true });
+
+            const answers = config.questions.slice(0, 5).map((q, i) => ({
+                name: (q || `السؤال ${i + 1}`).slice(0, 256),
+                value: (interaction.fields.getTextInputValue(`answer_${i}`) || '(بدون إجابة)').slice(0, 1024)
+            }));
+
+            const resultEmbed = new EmbedBuilder()
+                .setTitle(`تقديم جديد: ${config.title || 'تقديم'}`)
+                .setColor(0xd4af37)
+                .setAuthor({ name: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() })
+                .addFields(answers)
+                .setFooter({ text: `معرّف المتقدم: ${interaction.user.id}` })
+                .setTimestamp();
+
+            const resultChannel = interaction.guild.channels.cache.get(config.resultChannelId || config.channelId);
+            if (resultChannel?.isTextBased?.()) {
+                await resultChannel.send({ embeds: [resultEmbed] }).catch(() => {});
+            }
+
+            return interaction.reply({ content: 'تم إرسال تقديمك بنجاح، الإدارة رح تراجعه قريباً.', ephemeral: true });
         }
 
         if (interaction.isButton() && interaction.customId.startsWith('memberhistory:')) {
