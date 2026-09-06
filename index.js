@@ -45,8 +45,7 @@ const KickConfig = mongoose.model('KickConfig', new mongoose.Schema({
         roleId: String,
         customMessage: String,
         isLive: { type: Boolean, default: false },
-        lastCategoryName: { type: String, default: null },
-        categoryAlerts: { type: Boolean, default: true }
+        lastCategoryName: { type: String, default: null }
     }]
 }));
 
@@ -71,6 +70,18 @@ const UserLevel = mongoose.model('UserLevel', new mongoose.Schema({
     level: { type: Number, default: 1 },
     msgCount: { type: Number, default: 0 }
 }));
+
+const LevelBackup = mongoose.model('LevelBackup', new mongoose.Schema({
+    guildId: { type: String, required: true, index: true },
+    resetBy: { type: String, required: true },
+    resetAt: { type: Date, default: Date.now },
+    levels: [{
+        userId: { type: String, required: true },
+        xp: { type: Number, default: 0 },
+        level: { type: Number, default: 1 },
+        msgCount: { type: Number, default: 0 }
+    }]
+}, { timestamps: false }));
 
 const ModConfig = mongoose.model('ModConfig', new mongoose.Schema({
     guildId: String,
@@ -204,6 +215,17 @@ const MemberHistory = mongoose.model('MemberHistory', new mongoose.Schema({
     createdAt: { type: Date, default: Date.now, index: true }
 }, { timestamps: false }));
 
+const InviteRecord = mongoose.model('InviteRecord', new mongoose.Schema({
+    guildId: { type: String, required: true, index: true },
+    inviterId: { type: String, required: true, index: true },
+    invitedUserId: { type: String, required: true, index: true },
+    inviteCode: { type: String, required: true },
+    joinedAt: { type: Date, default: Date.now },
+    leftAt: { type: Date, default: null },
+    currentlyInGuild: { type: Boolean, default: true },
+    createdAt: { type: Date, default: Date.now }
+}, { timestamps: false }));
+
 const Suggestion = mongoose.model('Suggestion', new mongoose.Schema({
     guildId: String,
     messageId: String,
@@ -228,22 +250,6 @@ const TicketConfig = mongoose.model('TicketConfig', new mongoose.Schema({
     ticketCount: { type: Number, default: 0 },
     buttons: [{ label: String, emoji: String, adminRole: String, categoryId: String }],
     menuOptions: [{ label: String, emoji: String, adminRole: String, categoryId: String }]
-}));
-
-const NamePanelConfig = mongoose.model('NamePanelConfig', new mongoose.Schema({
-    guildId: String,
-    channelId: String,
-    emojiId: String,
-    imagePath: String
-}));
-
-const ApplicationConfig = mongoose.model('ApplicationConfig', new mongoose.Schema({
-    guildId: String,
-    channelId: String,
-    resultChannelId: String,
-    title: String,
-    description: String,
-    questions: { type: [String], default: [] }
 }));
 
 // ==========================================
@@ -600,7 +606,7 @@ passport.use(new Strategy({
 }, (accessToken, refreshToken, profile, done) => done(null, profile)));
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'BOT-secret-key-2026',
+    secret: process.env.SESSION_SECRET || 'VORTEX -secret-key-2026',
     resave: false,
     saveUninitialized: false
 }));
@@ -613,59 +619,38 @@ const checkAuth = (req, res, next) => {
     res.redirect('/login');
 };
 
+const checkDashboardOwner = (req, res, next) => {
+    const ownerId = String(process.env.DASHBOARD_OWNER_ID || '').trim();
+    if (!ownerId) return res.status(500).send('DASHBOARD_OWNER_ID غير مضبوط في متغيرات البيئة.');
+    if (String(req.user?.id || '') !== ownerId) return res.status(403).send('هذا الحساب غير مخول لدخول لوحة التحكم.');
+    next();
+};
+
 const checkBotGuildAccess = (req, res, next) => {
     if (!client.guilds.cache.has(req.params.guildId)) return res.status(404).send('البوت غير موجود في هذا السيرفر.');
     next();
 };
 
-// يتأكد إن حساب Discord المسجل دخوله يملك صلاحية Administrator (أو هو مالك السيرفر) داخل هذا السيرفر تحديداً.
-// بدون هذا التحقق، أي حساب مسجل دخول عبر OAuth كان يقدر يدير أي سيرفر البوت موجود فيه.
-async function isGuildAdmin(guild, userId) {
+const checkGuildAccess = (req, res, next) => {
+    const guildId = req.params.guildId;
+    const guild = req.user?.guilds?.find(g => g.id === guildId);
+    if (!guild) return res.status(403).send('ليس لديك صلاحية إدارة هذا السيرفر.');
     try {
-        if (!guild || !userId) return false;
-        if (guild.ownerId === userId) return true;
-        const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
-        return !!member?.permissions?.has(PermissionFlagsBits.Administrator);
-    } catch (err) {
-        console.error('[Admin Check Error]', err.message);
-        return false;
-    }
-}
-
-const checkGuildAdmin = async (req, res, next) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.status(404).send('البوت غير موجود في هذا السيرفر.');
-    const allowed = await isGuildAdmin(g, req.user.id);
-    if (!allowed) return res.status(403).send('لا تملك صلاحية الأدمن في هذا السيرفر.');
+        const permissions = BigInt(guild.permissions || 0);
+        if ((permissions & 8n) !== 8n && (permissions & 32n) !== 32n) return res.status(403).send('تحتاج إلى صلاحية إدارة السيرفر أو Administrator.');
+    } catch { return res.status(403).send('صلاحيات السيرفر غير صالحة.'); }
     next();
 };
 
-app.use('/manage/:guildId', checkAuth, checkBotGuildAccess, checkGuildAdmin);
-app.use('/save/:guildId', checkAuth, checkBotGuildAccess, checkGuildAdmin);
-app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess, checkGuildAdmin);
-app.use('/toggle-kick-category/:guildId', checkAuth, checkBotGuildAccess, checkGuildAdmin);
-
+// The dashboard owner may view and configure every guild where the bot is present.
+// Discord permissions are still checked separately before each bot action.
+app.use('/manage/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
+app.use('/save/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
+app.use('/delete-kick/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
 
 app.get('/auth/discord', passport.authenticate('discord'));
-app.get('/callback', (req, res, next) => {
-    passport.authenticate('discord', (err, user) => {
-        if (err) {
-            console.error('[Discord OAuth Error]', err.message || err);
-            if (err.oauthError) {
-                console.error('[Discord OAuth Error Details] status:', err.oauthError.statusCode);
-                console.error('[Discord OAuth Error Details] body:', err.oauthError.data);
-            }
-            return res.redirect('/login');
-        }
-        if (!user) return res.redirect('/login');
-        req.logIn(user, (loginErr) => {
-            if (loginErr) {
-                console.error('[Session Login Error]', loginErr);
-                return next(loginErr);
-            }
-            return res.redirect('/dashboard');
-        });
-    })(req, res, next);
+app.get('/callback', passport.authenticate('discord', { failureRedirect: '/login' }), (req, res) => {
+    res.redirect('/dashboard');
 });
 
 app.get('/logout', (req, res) => {
@@ -677,50 +662,16 @@ app.get('/login', (req, res) => {
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BOT · الدخول</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<title>VORTEX · الدخول</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
-:root{--ink:#08070f;--panel:#12111f;--panel-2:#181729;--violet:#8b6bff;--violet-2:#5b3df0;--cyan:#38e8d4;--red:#f0554d;--text:#f3f1fb;--muted:#948fb3;--line:rgba(139,107,255,.22)}
-*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--violet-2) #0c0b16}*::-webkit-scrollbar{width:8px}*::-webkit-scrollbar-track{background:#0c0b16}*::-webkit-scrollbar-thumb{background:linear-gradient(var(--violet),var(--violet-2));border-radius:20px}*::-webkit-scrollbar-button{display:none}
-body{margin:0;min-height:100vh;background:var(--ink);color:var(--text);font-family:'Tajawal',sans-serif;display:grid;place-items:center;overflow:hidden}
-body:before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 18%,rgba(139,107,255,.22),transparent 32%),radial-gradient(circle at 82% 78%,rgba(56,232,212,.14),transparent 30%),radial-gradient(circle at 50% 100%,rgba(91,61,240,.16),transparent 40%),linear-gradient(160deg,#08070f,#0d0c1a 55%,#08070f)}
-body:after{content:'';position:fixed;inset:0;pointer-events:none;opacity:.5;background-image:radial-gradient(rgba(139,107,255,.13) 1px,transparent 1px);background-size:26px 26px;mask-image:radial-gradient(circle at 50% 40%,#000,transparent 72%)}
-.orb{position:fixed;border-radius:50%;filter:blur(3px);pointer-events:none;opacity:.55;animation:float 9s ease-in-out infinite}
-.orb1{width:10px;height:10px;background:var(--cyan);top:18%;left:14%;box-shadow:0 0 24px var(--cyan)}
-.orb2{width:7px;height:7px;background:var(--violet);top:70%;left:82%;box-shadow:0 0 20px var(--violet);animation-delay:1.4s}
-.orb3{width:5px;height:5px;background:#fff;top:30%;left:78%;box-shadow:0 0 14px #fff;animation-delay:2.6s}
-@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-18px)}}
-.login-shell{position:relative;z-index:1;width:min(420px,calc(100% - 36px));padding:46px 40px 38px;background:linear-gradient(180deg,rgba(24,23,41,.86),rgba(14,13,24,.9));border:1px solid var(--line);border-radius:26px;backdrop-filter:blur(22px);box-shadow:0 30px 90px rgba(0,0,0,.55),inset 0 1px rgba(255,255,255,.04);text-align:center}
-.mark{width:64px;height:64px;margin:0 auto 22px;position:relative;display:grid;place-items:center;border-radius:20px;background:conic-gradient(from 220deg,var(--violet),var(--cyan),var(--violet-2),var(--violet));box-shadow:0 16px 40px rgba(139,107,255,.35)}
-.mark:before{content:'';position:absolute;inset:3px;border-radius:17px;background:var(--panel)}
-.mark svg{position:relative;z-index:1;width:28px;height:28px}
-.micro{color:var(--cyan);font:700 10px 'JetBrains Mono',monospace;letter-spacing:3px;margin-bottom:6px}
-.login-shell h1{margin:0 0 6px;font-size:26px;font-weight:800}
-.login-shell>p{color:var(--muted);font-size:12.5px;line-height:1.9;margin:0 0 26px;max-width:320px;margin-left:auto;margin-right:auto}
-.system-list{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:26px}
-.system-list span{padding:6px 12px;border:1px solid var(--line);border-radius:20px;color:#cbc6e6;font-size:10px;background:rgba(139,107,255,.06);font-family:'JetBrains Mono',monospace}
-.discord-button{display:flex;align-items:center;justify-content:center;gap:11px;width:100%;min-height:54px;border-radius:14px;text-decoration:none;color:#0c0a17;font-weight:800;font-size:14px;background:linear-gradient(100deg,var(--cyan),var(--violet) 60%,var(--violet-2));background-size:180% 100%;box-shadow:0 16px 36px rgba(139,107,255,.28);transition:.3s}
-.discord-button svg{width:21px;height:21px;fill:#0c0a17}
-.discord-button:hover{transform:translateY(-2px);background-position:100% 0;box-shadow:0 20px 44px rgba(56,232,212,.28)}
-.secure-note{display:flex;gap:7px;align-items:center;justify-content:center;color:#77729a;font-size:10px;margin-top:18px}
-.secure-note i{width:6px;height:6px;border-radius:50%;background:#4be39a;box-shadow:0 0 10px #4be39a}
-.corner-mark{margin-top:26px;color:#4c4870;font:600 9px 'JetBrains Mono',monospace;letter-spacing:1.5px}
-@media(max-width:480px){.login-shell{padding:36px 24px 30px;border-radius:20px}}
+:root{--ink:#0b0a08;--panel:#17130e;--panel-2:#211a12;--gold:#f4c24c;--gold-2:#a86e13;--red:#dd5147;--text:#f6f0e5;--muted:#a19889;--line:rgba(244,194,76,.18)}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--gold-2) #0f0d0a}*::-webkit-scrollbar{width:8px}*::-webkit-scrollbar-track{background:#0f0d0a}*::-webkit-scrollbar-thumb{background:linear-gradient(var(--gold),var(--gold-2));border-radius:20px}*::-webkit-scrollbar-button{display:none}
+body{margin:0;min-height:100vh;background:var(--ink);color:var(--text);font-family:'Cairo',sans-serif;display:grid;place-items:center;overflow:hidden}body:before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 12% 20%,rgba(244,194,76,.13),transparent 28%),radial-gradient(circle at 84% 76%,rgba(221,81,71,.09),transparent 24%),linear-gradient(135deg,#0b0a08,#160f0d 48%,#0b0a08)}body:after{content:'';position:fixed;inset:0;pointer-events:none;opacity:.24;background-image:linear-gradient(rgba(244,194,76,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(244,194,76,.08) 1px,transparent 1px);background-size:54px 54px;mask-image:linear-gradient(90deg,transparent,#000 22%,#000 78%,transparent)}.login-shell{position:relative;z-index:1;width:min(1040px,calc(100% - 48px));min-height:590px;display:grid;grid-template-columns:1.1fr .9fr;background:rgba(20,16,11,.78);border:1px solid var(--line);border-radius:28px;overflow:hidden;box-shadow:0 30px 100px rgba(0,0,0,.42)}.brand-panel{position:relative;padding:58px 52px;background:linear-gradient(145deg,rgba(244,194,76,.12),rgba(18,14,10,.82) 53%,rgba(221,81,71,.09));display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--line)}.brand-panel:after{content:'V';position:absolute;left:5%;bottom:-24%;font:900 360px 'IBM Plex Mono',monospace;color:rgba(244,194,76,.045);line-height:1}.micro{position:relative;z-index:1;color:var(--gold);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:2px}.brand-panel h1{position:relative;z-index:1;font-size:clamp(58px,8vw,105px);letter-spacing:10px;line-height:.9;margin:0;background:linear-gradient(115deg,#fff0b0 8%,var(--gold) 42%,#e47665 88%);-webkit-background-clip:text;color:transparent}.brand-panel p{position:relative;z-index:1;max-width:360px;color:var(--muted);font-size:13px;line-height:2;margin:20px 0 0}.system-list{position:relative;z-index:1;display:flex;gap:9px;flex-wrap:wrap;margin-top:30px}.system-list span{padding:7px 11px;border:1px solid var(--line);border-radius:20px;color:#cfc5b3;font-size:10px;background:rgba(0,0,0,.14)}.login-panel{padding:58px 52px;display:flex;flex-direction:column;justify-content:center;background:rgba(12,10,8,.74)}.panel-kicker{color:var(--muted);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:20px}.login-panel h2{margin:0;font-size:31px;line-height:1.3}.login-panel p{color:var(--muted);font-size:13px;line-height:1.9;margin:12px 0 30px}.discord-button{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:58px;border-radius:13px;text-decoration:none;color:#191207;font-weight:800;font-size:14px;background:linear-gradient(100deg,var(--gold),#ffe59a 45%,var(--gold));box-shadow:0 14px 34px rgba(244,194,76,.18);transition:.25s}.discord-button svg{width:22px;height:22px;fill:#191207}.discord-button:hover{transform:translateY(-3px);box-shadow:0 20px 42px rgba(244,194,76,.3);filter:saturate(1.1)}.secure-note{display:flex;gap:8px;align-items:center;color:#827a6d;font-size:10px;margin-top:20px}.secure-note i{width:7px;height:7px;border-radius:50%;background:#5fd083;box-shadow:0 0 10px #5fd083}.corner-mark{margin-top:58px;color:#5f584e;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:1.5px}
+@media(max-width:760px){body{overflow:auto;display:block;padding:18px 0}.login-shell{width:calc(100% - 28px);min-height:0;display:flex;flex-direction:column}.brand-panel{padding:34px 25px 30px;min-height:300px}.brand-panel h1{font-size:58px;letter-spacing:6px}.brand-panel p{font-size:12px;margin-top:14px}.brand-panel:after{font-size:220px;bottom:-22%}.login-panel{padding:32px 25px 36px}.login-panel h2{font-size:26px}.corner-mark{margin-top:35px}}
 </style>
 </head>
-<body>
-<i class="orb orb1"></i><i class="orb orb2"></i><i class="orb orb3"></i>
-<main class="login-shell">
-    <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg></div>
-    <div class="micro">BOT / CONTROL CENTER</div>
-    <h1>أهلًا بك في مركز التحكم</h1>
-    <p>سجّل الدخول بحساب Discord المصرّح له للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p>
-    <div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div>
-    <a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a>
-    <div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div>
-    <div class="corner-mark">SYSTEM ONLINE · BUILD 3.0</div>
-</main>
-</body></html>`);
+<body><main class="login-shell"><section class="brand-panel"><div><div class="micro">VORTEX / CONTROL CENTER</div><h1>VORTEX</h1><p>مركز تحكم واحد لإدارة سيرفراتك، حماية مجتمعك، ومتابعة كل الأنظمة من واجهة مرتبة وسريعة.</p><div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div></div><div class="corner-mark">SYSTEM ONLINE · BUILD 2.0</div></section><section class="login-panel"><div class="panel-kicker">AUTHENTICATION REQUIRED</div><h2>أهلًا بك في مركز التحكم</h2><p>سجّل الدخول بحساب Discord المصرّح له للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p><a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a><div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div></section></main></body></html>`);
 });
 
 app.get('/ping', (req, res) => res.send('I am alive!'));
@@ -745,33 +696,32 @@ function ui(guild, active, content) {
         ['autoreply', 'الردود الآلية', `/manage/${guildId}/autoreply`, '<path d="M4 5h16v11H8l-4 3z"/><path d="M8 9h8M8 12h5"/>'],
         ['levels', 'نظام المستويات', `/manage/${guildId}/levels`, '<path d="M5 19V9M12 19V5M19 19v-8"/>'],
         ['welcome', 'الترحيب', `/manage/${guildId}/welcome`, '<path d="M12 21s-8-4.5-8-10V5l8-3 8 3v6c0 5.5-8 10-8 10z"/><path d="m9 12 2 2 4-4"/>'],
-        ['namepanel', 'لوحة تغيير الاسم', `/manage/${guildId}/namepanel`, '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>'],
-        ['applications', 'التقديمات', `/manage/${guildId}/applications`, '<path d="M9 4h6a2 2 0 0 1 2 2v1H7V6a2 2 0 0 1 2-2z"/><rect x="5" y="7" width="14" height="14" rx="2"/><path d="M9 12h6M9 16h4"/>'],
         ['giveaway', 'الهدايا', `/manage/${guildId}/giveaway`, '<path d="M4 10h16v10H4zM3 7h18v3H3zM12 7v13M12 7H8a2 2 0 1 1 2-2c2 0 2 2 2 2z"/>'],
         ['roles', 'الرتب', `/manage/${guildId}/roles`, '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 0 1 5 2M17 20h4"/>'],
         ['mod', 'الإشراف', `/manage/${guildId}/mod`, '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'],
         ['massban', 'تبنيد الأشخاص', `/manage/${guildId}/massban`, '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6z"/><path d="M8 12h8"/>'],
-        ['channelswipe', 'حذف جميع الرومات', `/manage/${guildId}/channelswipe`, '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>']
+        ['channelswipe', 'حذف جميع الرومات', `/manage/${guildId}/channelswipe`, '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>'],
+        ['poetry', 'الشعر العراقي', `/manage/${guildId}/poetry`, '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>']
     ] : [];
     const navHtml = nav.map(([key, label, href, path]) => `<a class="rail-link ${active === key ? 'is-active' : ''}" href="${href}" aria-current="${active === key ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${path}</svg><span>${label}</span><i></i></a>`).join('');
     return `<!doctype html>
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${safe(guildName)} · BOT</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<title>${safe(guildName)} · VORTEX</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
-:root{--ink:#08070f;--panel:#12111f;--panel-2:#181729;--panel-3:#1e1d34;--line:rgba(139,107,255,.18);--line-strong:rgba(139,107,255,.4);--gold:#8b6bff;--gold-2:#5b3df0;--cyan:#38e8d4;--red:#f0554d;--red-soft:rgba(240,85,77,.14);--muted:#948fb3;--text-muted:#948fb3;--text:#f3f1fb;--gold-border:rgba(139,107,255,.18);--gold-glow:rgba(139,107,255,.35);--dark:#08070f;--shadow:0 22px 70px rgba(0,0,0,.45);--rail:272px}
-*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--gold-2) #0b0a15}*::-webkit-scrollbar{width:9px;height:9px}*::-webkit-scrollbar-track{background:#0b0a15;border-radius:12px}*::-webkit-scrollbar-thumb{background:linear-gradient(180deg,var(--gold),var(--gold-2));border:2px solid #0b0a15;border-radius:12px}*::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg,var(--cyan),var(--gold))}*::-webkit-scrollbar-button{display:none;width:0;height:0}html{background:var(--ink);overflow-x:hidden}body{margin:0;background:radial-gradient(circle at 15% 8%,rgba(139,107,255,.09),transparent 30%),radial-gradient(circle at 90% 80%,rgba(56,232,212,.06),transparent 26%),var(--ink);color:var(--text);font-family:'Tajawal',sans-serif;min-height:100vh}body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.22;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#000,transparent 88%)}a{color:inherit}.app{min-height:100vh}.rail{position:fixed;z-index:20;inset:0 0 0 auto;width:var(--rail);padding:24px 16px 18px;background:linear-gradient(180deg,rgba(24,23,41,.98),rgba(10,9,17,.98));border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-16px 0 50px rgba(0,0,0,.3)}.brand{display:flex;align-items:center;gap:11px;padding:4px 9px 23px;border-bottom:1px solid var(--line)}.brand-mark{width:40px;height:40px;position:relative;display:grid;place-items:center;border-radius:13px;background:conic-gradient(from 220deg,var(--gold),var(--cyan),var(--gold-2),var(--gold));box-shadow:0 10px 25px rgba(139,107,255,.28)}.brand-mark:before{content:'';position:absolute;inset:2px;border-radius:11px;background:#151329}.brand-mark svg{position:relative;z-index:1;width:19px;height:19px}.brand strong{display:block;font-size:19px;letter-spacing:2px;line-height:1}.brand small{display:block;color:var(--muted);font-size:9px;letter-spacing:2px;margin-top:5px;font-family:'JetBrains Mono',monospace}.rail-section{color:#5f5a82;font:600 10px 'JetBrains Mono',monospace;letter-spacing:1px;margin:25px 10px 9px;text-transform:uppercase}.rail-nav{display:flex;flex-direction:column;gap:4px;overflow:auto;padding:2px 3px 10px 2px;scrollbar-width:thin;scrollbar-color:var(--gold-2) transparent}.rail-nav::-webkit-scrollbar{width:6px}.rail-nav::-webkit-scrollbar-track{background:transparent}.rail-nav::-webkit-scrollbar-thumb{border:0;background:linear-gradient(180deg,var(--gold),var(--gold-2))}.rail-nav::-webkit-scrollbar-button{display:none}.rail-link{min-height:43px;display:flex;align-items:center;gap:12px;padding:9px 11px;border:1px solid transparent;border-radius:12px;text-decoration:none;color:#a29cc2;font-size:12px;font-weight:600;transition:.2s ease}.rail-link svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}.rail-link i{width:5px;height:5px;border-radius:50%;margin-right:auto;background:transparent}.rail-link:hover{background:rgba(139,107,255,.09);color:var(--text);transform:translateX(-3px)}.rail-link.is-active{background:linear-gradient(90deg,rgba(139,107,255,.2),rgba(56,232,212,.05));border-color:var(--line);color:var(--cyan);box-shadow:inset -3px 0 var(--gold)}.rail-link.is-active i{background:var(--cyan);box-shadow:0 0 12px var(--cyan)}.rail-footer{margin-top:auto;padding:15px 10px 0;border-top:1px solid var(--line);color:var(--muted);font-size:10px}.rail-footer a{color:var(--red);text-decoration:none;float:left}.workspace{margin-right:var(--rail);min-width:0}.topbar{height:78px;padding:0 42px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);background:rgba(10,9,17,.72);backdrop-filter:blur(18px);position:sticky;top:0;z-index:10}.menu-btn{display:none;border:1px solid var(--line);background:var(--panel);color:var(--gold);border-radius:11px;width:42px;height:42px;font-size:20px}.crumb{color:var(--muted);font:500 11px 'JetBrains Mono',monospace;letter-spacing:.5px}.crumb b{display:block;color:var(--text);font:700 18px 'Tajawal',sans-serif;margin-top:2px}.top-status{margin-right:auto;display:flex;align-items:center;gap:8px;color:#b6b0d4;font-size:11px}.status-dot{width:7px;height:7px;border-radius:50%;background:#43e0a0;box-shadow:0 0 12px #43e0a0}.top-actions{display:flex;gap:8px}.top-actions a{display:grid;place-items:center;width:38px;height:38px;border:1px solid var(--line);border-radius:10px;color:var(--muted);text-decoration:none;background:rgba(255,255,255,.02)}.top-actions a:hover{color:var(--cyan);border-color:var(--line-strong)}.content{padding:38px 42px 60px;max-width:1500px;margin:auto}.welcome-strip{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:30px;padding:31px 34px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(110deg,rgba(139,107,255,.14),rgba(19,17,32,.9) 45%),var(--panel);box-shadow:var(--shadow);position:relative;overflow:hidden}.welcome-strip:after{content:'V';position:absolute;left:27px;top:-42px;color:rgba(139,107,255,.08);font:900 180px 'JetBrains Mono',monospace}.eyebrow{color:var(--cyan);font:600 10px 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase}.welcome-strip h1{margin:8px 0 3px;font-size:29px;letter-spacing:-.5px}.welcome-strip p{margin:0;color:var(--muted);font-size:12px}.welcome-meta{position:relative;z-index:1;text-align:left;color:var(--muted);font:500 10px 'JetBrains Mono',monospace}.view{min-width:0}.card{background:linear-gradient(145deg,rgba(30,29,52,.9),rgba(15,14,25,.94));border:1px solid var(--line);border-radius:18px;padding:25px;margin-bottom:20px;box-shadow:0 12px 40px rgba(0,0,0,.22)}.card:hover{border-color:var(--line-strong)}.card h3{display:flex;align-items:center;gap:10px;margin:0 0 20px;font-size:16px;color:var(--text)}.card h3 svg{width:19px;color:var(--gold)}label{display:block;color:#b3ade0;font-size:12px;margin:15px 0 7px}input,select,textarea{width:100%;padding:12px 14px;color:var(--text);background:#0d0c17;border:1px solid rgba(255,255,255,.09);border-radius:10px;outline:0;font:500 13px 'Tajawal',sans-serif;transition:.2s}input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(139,107,255,.14)}textarea{min-height:105px;resize:vertical}.btn-save{border:0;border-radius:10px;padding:12px 21px;background:linear-gradient(135deg,var(--gold),var(--cyan));color:#0c0a17;font:800 12px 'Tajawal',sans-serif;cursor:pointer;box-shadow:0 8px 20px rgba(139,107,255,.18);transition:.2s}.btn-save:hover{transform:translateY(-2px);filter:brightness(1.08)}.btn-danger{background:var(--red)!important;color:#fff!important}.tag{display:inline-flex;align-items:center;border-radius:20px;padding:4px 9px;font-size:10px}.tag-blue{background:rgba(139,107,255,.14);color:var(--gold);border:1px solid var(--line)}.tag-red{background:var(--red-soft);color:#f5928c;border:1px solid rgba(240,85,77,.2)}.data-table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid var(--line);border-radius:13px;font-size:12px}.data-table th{background:rgba(139,107,255,.09);color:var(--gold);font-size:10px;text-align:right;padding:13px}.data-table td{padding:13px;border-top:1px solid rgba(255,255,255,.055);color:#cac5e6}.data-table-wrap{overflow:auto}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-box{padding:20px;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.02)}.stat-num{color:var(--gold);font:800 28px 'JetBrains Mono',monospace}.stat-label{color:var(--muted);font-size:11px;margin-top:5px}.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.guild-card{padding:21px;border:1px solid var(--line);border-radius:17px;background:var(--panel);transition:.2s}.guild-card:hover{transform:translateY(-4px);border-color:var(--gold)}.guild-icon{width:48px;height:48px;border-radius:14px;object-fit:cover;margin-bottom:14px}.guild-card h3{margin:0 0 12px;font-size:15px}.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.06)}.toggle-row input[type=checkbox]{width:19px;height:19px;accent-color:var(--gold)}.drawer-backdrop{display:none}
+:root{--ink:#0c0b09;--panel:#15120e;--panel-2:#1b1711;--panel-3:#231d15;--line:rgba(244,194,76,.15);--line-strong:rgba(244,194,76,.34);--gold:#f4c24c;--gold-2:#b57b19;--red:#e14d43;--red-soft:rgba(225,77,67,.14);--muted:#918a7c;--text:#f5f0e6;--shadow:0 22px 70px rgba(0,0,0,.28);--rail:272px}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--gold-2) #0f0d0a}*::-webkit-scrollbar{width:9px;height:9px}*::-webkit-scrollbar-track{background:#0f0d0a;border-radius:12px}*::-webkit-scrollbar-thumb{background:linear-gradient(180deg,var(--gold),var(--gold-2));border:2px solid #0f0d0a;border-radius:12px}*::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg,#ffe08a,var(--gold))}*::-webkit-scrollbar-button{display:none;width:0;height:0}html{background:var(--ink);overflow-x:hidden}body{margin:0;background:radial-gradient(circle at 15% 8%,rgba(244,194,76,.06),transparent 28%),radial-gradient(circle at 90% 80%,rgba(225,77,67,.05),transparent 24%),var(--ink);color:var(--text);font-family:'Cairo',sans-serif;min-height:100vh}body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.22;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#000,transparent 88%)}a{color:inherit}.app{min-height:100vh}.rail{position:fixed;z-index:20;inset:0 0 0 auto;width:var(--rail);padding:24px 16px 18px;background:linear-gradient(180deg,rgba(24,19,13,.98),rgba(12,11,9,.98));border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-16px 0 50px rgba(0,0,0,.16)}.brand{display:flex;align-items:center;gap:11px;padding:4px 9px 23px;border-bottom:1px solid var(--line)}.brand-mark{width:40px;height:40px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,var(--gold),var(--gold-2));color:#161007;font-size:18px;font-weight:900;box-shadow:0 10px 25px rgba(244,194,76,.18)}.brand strong{display:block;font-size:19px;letter-spacing:2px;line-height:1}.brand small{display:block;color:var(--muted);font-size:9px;letter-spacing:2px;margin-top:5px;font-family:'IBM Plex Mono',monospace}.rail-section{color:#756d61;font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1px;margin:25px 10px 9px;text-transform:uppercase}.rail-nav{display:flex;flex-direction:column;gap:4px;overflow:auto;padding:2px 3px 10px 2px;scrollbar-width:thin;scrollbar-color:var(--gold-2) transparent}.rail-nav::-webkit-scrollbar{width:6px}.rail-nav::-webkit-scrollbar-track{background:transparent}.rail-nav::-webkit-scrollbar-thumb{border:0;background:linear-gradient(180deg,var(--gold),var(--gold-2))}.rail-nav::-webkit-scrollbar-button{display:none}.rail-link{min-height:43px;display:flex;align-items:center;gap:12px;padding:9px 11px;border:1px solid transparent;border-radius:12px;text-decoration:none;color:#a59c8d;font-size:12px;font-weight:600;transition:.2s ease}.rail-link svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}.rail-link i{width:5px;height:5px;border-radius:50%;margin-right:auto;background:transparent}.rail-link:hover{background:rgba(244,194,76,.07);color:var(--text);transform:translateX(-3px)}.rail-link.is-active{background:linear-gradient(90deg,rgba(244,194,76,.16),rgba(244,194,76,.045));border-color:var(--line);color:var(--gold);box-shadow:inset -3px 0 var(--gold)}.rail-link.is-active i{background:var(--gold);box-shadow:0 0 12px var(--gold)}.rail-footer{margin-top:auto;padding:15px 10px 0;border-top:1px solid var(--line);color:var(--muted);font-size:10px}.rail-footer a{color:var(--red);text-decoration:none;float:left}.workspace{margin-right:var(--rail);min-width:0}.topbar{height:78px;padding:0 42px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);background:rgba(12,11,9,.72);backdrop-filter:blur(18px);position:sticky;top:0;z-index:10}.menu-btn{display:none;border:1px solid var(--line);background:var(--panel);color:var(--gold);border-radius:11px;width:42px;height:42px;font-size:20px}.crumb{color:var(--muted);font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.5px}.crumb b{display:block;color:var(--text);font:700 18px 'Cairo',sans-serif;margin-top:2px}.top-status{margin-right:auto;display:flex;align-items:center;gap:8px;color:#b4ad9f;font-size:11px}.status-dot{width:7px;height:7px;border-radius:50%;background:#48c774;box-shadow:0 0 12px #48c774}.top-actions{display:flex;gap:8px}.top-actions a{display:grid;place-items:center;width:38px;height:38px;border:1px solid var(--line);border-radius:10px;color:var(--muted);text-decoration:none;background:rgba(255,255,255,.015)}.top-actions a:hover{color:var(--gold);border-color:var(--line-strong)}.content{padding:38px 42px 60px;max-width:1500px;margin:auto}.welcome-strip{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:30px;padding:31px 34px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(110deg,rgba(244,194,76,.11),rgba(23,18,12,.88) 45%),var(--panel);box-shadow:var(--shadow);position:relative;overflow:hidden}.welcome-strip:after{content:'V';position:absolute;left:27px;top:-42px;color:rgba(244,194,76,.055);font:900 180px 'IBM Plex Mono',monospace}.eyebrow{color:var(--gold);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;text-transform:uppercase}.welcome-strip h1{margin:8px 0 3px;font-size:29px;letter-spacing:-.5px}.welcome-strip p{margin:0;color:var(--muted);font-size:12px}.welcome-meta{position:relative;z-index:1;text-align:left;color:var(--muted);font:500 10px 'IBM Plex Mono',monospace}.view{min-width:0}.card{background:linear-gradient(145deg,rgba(35,29,21,.88),rgba(18,15,11,.92));border:1px solid var(--line);border-radius:18px;padding:25px;margin-bottom:20px;box-shadow:0 12px 40px rgba(0,0,0,.14)}.card:hover{border-color:var(--line-strong)}.card h3{display:flex;align-items:center;gap:10px;margin:0 0 20px;font-size:16px;color:var(--text)}.card h3 svg{width:19px;color:var(--gold)}label{display:block;color:#b6ad9d;font-size:12px;margin:15px 0 7px}input,select,textarea{width:100%;padding:12px 14px;color:var(--text);background:#0f0d0a;border:1px solid rgba(255,255,255,.09);border-radius:10px;outline:0;font:500 13px 'Cairo',sans-serif;transition:.2s}input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(244,194,76,.1)}textarea{min-height:105px;resize:vertical}.btn-save{border:0;border-radius:10px;padding:12px 21px;background:linear-gradient(135deg,var(--gold),var(--gold-2));color:#171006;font:800 12px 'Cairo',sans-serif;cursor:pointer;box-shadow:0 8px 20px rgba(244,194,76,.12);transition:.2s}.btn-save:hover{transform:translateY(-2px);filter:brightness(1.08)}.btn-danger{background:var(--red)!important;color:#fff!important}.tag{display:inline-flex;align-items:center;border-radius:20px;padding:4px 9px;font-size:10px}.tag-blue{background:rgba(244,194,76,.12);color:var(--gold);border:1px solid var(--line)}.tag-red{background:var(--red-soft);color:#f0837b;border:1px solid rgba(225,77,67,.2)}.data-table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid var(--line);border-radius:13px;font-size:12px}.data-table th{background:rgba(244,194,76,.07);color:var(--gold);font-size:10px;text-align:right;padding:13px}.data-table td{padding:13px;border-top:1px solid rgba(255,255,255,.055);color:#c8c0b2}.data-table-wrap{overflow:auto}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-box{padding:20px;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.018)}.stat-num{color:var(--gold);font:800 28px 'IBM Plex Mono',monospace}.stat-label{color:var(--muted);font-size:11px;margin-top:5px}.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.guild-card{padding:21px;border:1px solid var(--line);border-radius:17px;background:var(--panel);transition:.2s}.guild-card:hover{transform:translateY(-4px);border-color:var(--gold)}.guild-icon{width:48px;height:48px;border-radius:14px;object-fit:cover;margin-bottom:14px}.guild-card h3{margin:0 0 12px;font-size:15px}.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.06)}.toggle-row input[type=checkbox]{width:19px;height:19px;accent-color:var(--gold)}.drawer-backdrop{display:none}
 @media(max-width:950px){:root{--rail:245px}.content{padding:28px 24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.rail{transform:translateX(110%);transition:transform .25s ease;width:min(300px,88vw);box-shadow:-25px 0 80px rgba(0,0,0,.5)}.rail.is-open{transform:translateX(0)}.workspace{margin-right:0}.menu-btn{display:block}.topbar{height:67px;padding:0 15px}.top-status,.top-actions a:first-child{display:none}.crumb b{font-size:15px}.content{padding:18px 13px 35px}.welcome-strip{display:block;padding:22px 20px}.welcome-strip h1{font-size:23px}.welcome-meta{text-align:right;margin-top:16px}.stats-grid{grid-template-columns:1fr 1fr;gap:9px}.stat-box{padding:15px}.stat-num{font-size:21px}.card{padding:18px 14px;border-radius:14px}.drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:15}.drawer-backdrop.is-open{display:block}}
 </style>
 </head>
 <body>
 <div class="app">
-<aside class="rail" id="rail"><div class="brand"><div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg></div><div><strong>BOT</strong><small>CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
+<aside class="rail" id="rail"><div class="brand"><div class="brand-mark">V</div><div><strong>VORTEX</strong><small>CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
 <div class="drawer-backdrop" id="backdrop"></div>
-<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>BOT / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg></a><a href="/logout" title="تسجيل الخروج"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
+<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>VORTEX / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات">⌂</a><a href="/logout" title="تسجيل الخروج">↪</a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
 </div>
 <script>
 (() => { const rail=document.getElementById('rail'), backdrop=document.getElementById('backdrop'), btn=document.getElementById('menuBtn'); if(!rail||!backdrop||!btn)return; const close=()=>{rail.classList.remove('is-open');backdrop.classList.remove('is-open')}; btn.addEventListener('click',()=>{rail.classList.toggle('is-open');backdrop.classList.toggle('is-open')}); backdrop.addEventListener('click',close); window.addEventListener('keydown',e=>{if(e.key==='Escape')close()}); })();
@@ -857,32 +807,25 @@ app.post('/save/:guildId/admincmds', checkAuth, async (req, res) => {
 // ==========================================
 
 // --- [ Dashboard - Server List ] ---
-app.get('/dashboard', checkAuth, async (req, res) => {
-    const allGuilds = [...client.guilds.cache.values()];
-    const adminFlags = await Promise.all(allGuilds.map(g => isGuildAdmin(g, req.user.id)));
-    const botGuilds = allGuilds.filter((g, i) => adminFlags[i]);
+app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
+    const botGuilds = [...client.guilds.cache.values()];
     const cards = botGuilds.map(g => {
         const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
-        return `<div class="guild-card"><img src="${iconURL}" class="guild-icon" alt="${g.name}"><h3>${g.name}</h3><a href="/manage/${g.id}/home" class="guild-card-link">إدارة السيرفر<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></a></div>`;
+        return `<div class="guild-card"><img src="${iconURL}" class="guild-icon" alt="${g.name}"><h3>${g.name}</h3><a href="/manage/${g.id}/home" style="color:var(--gold);">الإعدادات</a></div>`;
     }).join('');
 
     const content = `
     <div style="text-align:center; margin-bottom:40px;">
-        <div style="width:56px;height:56px;margin:0 auto 18px;position:relative;display:grid;place-items:center;border-radius:18px;background:conic-gradient(from 220deg,var(--gold),var(--cyan),var(--gold-2),var(--gold));box-shadow:0 14px 34px rgba(139,107,255,.3);">
-            <div style="position:absolute;inset:2px;border-radius:15px;background:#12111f;"></div>
-            <svg style="position:relative;z-index:1;" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c2 5 4 8 8 8s6-3 8-8"/><path d="M4 20c2-5 4-8 8-8s6 3 8 8"/></svg>
-        </div>
-        <div style="font-size:44px; font-weight:800; letter-spacing:6px;
-            background: linear-gradient(135deg, var(--gold), var(--cyan) 55%, #fff);
+        <div style="font-size:48px; font-weight:800; letter-spacing:6px;
+            background: linear-gradient(135deg, var(--gold), #fff, var(--red));
             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-            margin-bottom:10px;">BOT</div>
+            margin-bottom:10px;">VORTEX </div>
         <p style="color:var(--text-muted); font-size:15px;">اختر السيرفر لإدارته</p>
-        <div style="margin-top:20px; max-width:400px; margin-left:auto; margin-right:auto; position:relative;">
-            <input type="text" id="guildSearch" placeholder="ابحث عن سيرفر..." onkeyup="filterGuilds()" style="text-align:center; border-radius:20px; background:rgba(139,107,255,.06); border:1px solid var(--gold-border);">
+        <div style="margin-top:20px; max-width:400px; margin-left:auto; margin-right:auto;">
+            <input type="text" id="guildSearch" placeholder="ابحث عن سيرفر..." onkeyup="filterGuilds()" style="text-align:center; border-radius:20px; background:rgba(212,175,55,0.05); border:1px solid var(--gold-border);">
         </div>
     </div>
-    ${botGuilds.length > 0 ? `<div class="guild-grid" id="guildGrid">${cards}</div>` : `<p style="color:var(--text-muted); text-align:center; padding:40px 0;">ما في عندك أي سيرفر فيه البوت وعندك صلاحية Administrator فيه.</p>`}
-    <style>.guild-card{display:flex;flex-direction:column}.guild-card-link{margin-top:auto;display:inline-flex;align-items:center;gap:6px;color:var(--cyan);font-size:12px;font-weight:700;text-decoration:none;padding-top:6px}.guild-card-link svg{transition:.2s}.guild-card:hover .guild-card-link svg{transform:translateX(-3px)}</style>
+    <div class="guild-grid" id="guildGrid">${cards}</div>
     <script>
         function filterGuilds() {
             const input = document.getElementById('guildSearch');
@@ -905,6 +848,53 @@ app.get('/dashboard', checkAuth, async (req, res) => {
 });
 
 // --- [ Home / Stats ] ---
+const inviteCache = new Map();
+
+async function fetchGuildInvites(guild) {
+    try {
+        const invites = await guild.invites.fetch();
+        const snapshot = new Map();
+        for (const invite of invites.values()) snapshot.set(invite.code, {
+            uses: invite.uses || 0,
+            inviterId: invite.inviter?.id || null,
+            inviterTag: invite.inviter?.tag || invite.inviter?.username || null
+        });
+        inviteCache.set(guild.id, snapshot);
+        return snapshot;
+    } catch (error) {
+        console.error(`[Invite Fetch Error] ${guild.id}:`, error.message);
+        return inviteCache.get(guild.id) || new Map();
+    }
+}
+
+async function attributeMemberInvite(member) {
+    const guild = member.guild;
+    const previous = inviteCache.get(guild.id) || new Map();
+    const current = await fetchGuildInvites(guild);
+    let usedInvite = null;
+    for (const [code, invite] of current) {
+        const before = previous.get(code);
+        if (invite.uses > (before?.uses || 0)) {
+            usedInvite = { code, ...invite };
+            break;
+        }
+    }
+    if (!usedInvite?.inviterId || usedInvite.inviterId === member.id) return null;
+    await InviteRecord.findOneAndUpdate(
+        { guildId: guild.id, invitedUserId: member.id },
+        { $set: { inviterId: usedInvite.inviterId, inviteCode: usedInvite.code, joinedAt: new Date(), leftAt: null, currentlyInGuild: true } },
+        { upsert: true, setDefaultsOnInsert: true }
+    );
+    return usedInvite;
+}
+
+async function markInviteMemberPresent(guildId, userId, present) {
+    await InviteRecord.updateOne(
+        { guildId, invitedUserId: userId },
+        { $set: { currentlyInGuild: present, ...(present ? { leftAt: null } : { leftAt: new Date() }) } }
+    ).catch(() => {});
+}
+
 async function createGuildInvite(guild) {
     const botMember = guild.members.me || await guild.members.fetch(client.user.id).catch(() => null);
     if (!botMember) return null;
@@ -917,7 +907,7 @@ async function createGuildInvite(guild) {
             maxAge: 0,
             maxUses: 0,
             unique: false,
-            reason: 'إنشاء رابط دخول من لوحة تحكم BOT'
+            reason: 'إنشاء رابط دخول من لوحة تحكم VORTEX'
         }).catch(() => null);
         if (invite) return { url: invite.url, channelName: channel.name };
     }
@@ -998,11 +988,6 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
         <td style="color:var(--text-muted);">#${g.channels.cache.get(st.channelId)?.name || 'قناة محذوفة'}</td>
         <td>${st.roleId ? `<span class="tag tag-red">@${g.roles.cache.get(st.roleId)?.name || 'رتبة محذوفة'}</span>` : '<span class="tag" style="background:rgba(255,255,255,0.05);color:var(--text-muted);">بدون منشن</span>'}</td>
         <td>
-            <a href="/toggle-kick-category/${g.id}/${i}" style="text-decoration:none;" title="${st.categoryAlerts === false ? 'تفعيل تنبيهات تغيير الكاتيقوري' : 'إيقاف تنبيهات تغيير الكاتيقوري'}">
-                <span class="tag ${st.categoryAlerts === false ? '' : 'tag-blue'}" style="cursor:pointer; ${st.categoryAlerts === false ? 'background:rgba(255,255,255,0.05);color:var(--text-muted);' : ''}">${st.categoryAlerts === false ? 'كاتيقوري: متوقف' : 'كاتيقوري: مفعّل'}</span>
-            </a>
-        </td>
-        <td>
             <a href="/delete-kick/${g.id}/${i}" class="btn-save btn-danger btn-sm" style="text-decoration:none;" onclick="return confirm('حذف الستريمر؟')">حذف</a>
         </td>
     </tr>`).join('');
@@ -1040,10 +1025,6 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
                         <input type="text" name="msg" placeholder="%name% بدأ البث الآن!">
                     </div>
                 </div>
-                <div class="toggle-row" style="margin-top:16px;">
-                    <label style="color:white; margin:0;">تفعيل تنبيه تغيير الكاتيقوري لهذا الستريمر</label>
-                    <input type="checkbox" name="categoryAlerts" checked style="width:20px; height:20px; accent-color:var(--gold); cursor:pointer;">
-                </div>
                 <button class="btn-save btn-green" style="margin-top:16px; width:auto; padding:12px 30px;">اضافة الستريمر</button>
             </form>
         </div>
@@ -1055,7 +1036,6 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
                     <th>الستريمر</th>
                     <th>القناة</th>
                     <th>المنشن</th>
-                    <th>تنبيه الكاتيقوري</th>
                     <th>الإجراء</th>
                 </tr>
             </thead>
@@ -1069,28 +1049,17 @@ app.get('/manage/:guildId/kick', checkAuth, async (req, res) => {
 app.post('/save/:guildId/kick', checkAuth, async (req, res) => {
     try {
         const { guildId } = req.params;
-        const { kickUser, channelId, roleId, msg, categoryAlerts } = req.body;
+        const { kickUser, channelId, roleId, msg } = req.body;
         const username = kickUser.replace('https://kick.com', '').replace('/', '').trim();
         await KickConfig.findOneAndUpdate(
             { guildId },
-            { $push: { streamers: { kickUsername: username, channelId, roleId, customMessage: msg, isLive: false, categoryAlerts: categoryAlerts === 'on' } } },
+            { $push: { streamers: { kickUsername: username, channelId, roleId, customMessage: msg, isLive: false } } },
             { upsert: true }
         );
         res.redirect(`/manage/${guildId}/kick`);
     } catch (err) {
         res.status(500).send('خطأ في إضافة الستريمر');
     }
-});
-
-app.get('/toggle-kick-category/:guildId/:index', checkAuth, async (req, res) => {
-    const { guildId, index } = req.params;
-    const config = await KickConfig.findOne({ guildId });
-    if (config && config.streamers[index]) {
-        config.streamers[index].categoryAlerts = config.streamers[index].categoryAlerts === false ? true : false;
-        config.markModified('streamers');
-        await config.save();
-    }
-    res.redirect(`/manage/${guildId}/kick`);
 });
 
 app.get('/delete-kick/:guildId/:index', checkAuth, async (req, res) => {
@@ -1260,7 +1229,7 @@ app.get('/manage/:guildId/welcome', checkAuth, async (req, res) => {
     res.send(ui(g, 'welcome', content));
 });
 
-app.post('/generate/:guildId/welcome-random', checkAuth, checkBotGuildAccess, checkGuildAdmin, async (req, res) => {
+app.post('/generate/:guildId/welcome-random', checkAuth, checkDashboardOwner, checkBotGuildAccess, async (req, res) => {
     try {
         const filename = `welcome-generated-${req.params.guildId}-${Date.now()}-${Math.floor(Math.random() * 100000)}.png`;
         const absolutePath = path.join(__dirname, 'uploads', filename);
@@ -1297,170 +1266,6 @@ app.post('/save/:guildId/welcome', checkAuth, async (req, res) => {
     if (b.imageUrl?.trim()) updateData['welcome.imagePath'] = b.imageUrl.trim();
     await GuildConfig.findOneAndUpdate({ guildId: req.params.guildId }, { $set: updateData }, { upsert: true });
     res.redirect(`/manage/${req.params.guildId}/welcome`);
-});
-
-// --- [ Name Panel ] ---
-app.get('/manage/:guildId/namepanel', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    const s = await NamePanelConfig.findOne({ guildId: g.id }) || {};
-
-    const content = `
-    <form method="POST" action="/save/${g.id}/namepanel" enctype="multipart/form-data">
-        <div class="card">
-            <h3>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-                لوحة تغيير الاسم
-            </h3>
-            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
-                حدد الروم، حط ID الإيموجي اللي بيظهر على الزر، وارفع صورة تظهر داخل الإيمبد. عند الضغط، بيطلع للعضو مودال يكتب فيه اسمه، ويتغير اسمه مباشرة داخل السيرفر.
-                <br><small style="color:#7a7595;">ملاحظة: ديسكورد ما بيدعم لون أسود حقيقي للأزرار، أقرب ستايل متوفر هو الرمادي الغامق (Secondary) وهو المستخدم هون.</small>
-            </p>
-            <label>الروم</label>
-            <select name="channelId" required>
-                <option value="">-- اختر الروم --</option>
-                ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}" ${s.channelId === c.id ? 'selected' : ''}># ${c.name}</option>`).join('')}
-            </select>
-            <label>ID الإيموجي (يظهر على الزر)</label>
-            <input type="text" name="emojiId" value="${s.emojiId || ''}" placeholder="مثلاً: 123456789012345678">
-            <label>صورة الإيمبد</label>
-            <input type="file" name="nameImage" accept="image/*">
-            ${s.imagePath ? `<div style="margin-top:12px;"><img src="/${s.imagePath.replace(/^\.\//,'')}" style="max-width:220px; border-radius:12px; border:1px solid var(--gold-border);"></div>` : ''}
-            <button class="btn-save" style="margin-top:20px;">إرسال</button>
-        </div>
-    </form>`;
-
-    res.send(ui(g, 'namepanel', content));
-});
-
-app.post('/save/:guildId/namepanel', checkAuth, upload.single('nameImage'), async (req, res) => {
-    try {
-        const { guildId } = req.params;
-        const { channelId, emojiId } = req.body;
-        const g = client.guilds.cache.get(guildId);
-        if (!g) return res.status(404).send('السيرفر غير موجود');
-        const channel = g.channels.cache.get(channelId);
-        if (!channel) return res.send('الروم غير موجود');
-
-        const update = { channelId, emojiId: (emojiId || '').trim() };
-        if (req.file) update.imagePath = req.file.path;
-
-        const config = await NamePanelConfig.findOneAndUpdate({ guildId }, { $set: update }, { upsert: true, new: true });
-
-        const embed = new EmbedBuilder()
-            .setTitle('تغيير الاسم')
-            .setDescription('اضغط على الزر بالأسفل وحط اسمك الجديد.')
-            .setColor(0xe74c3c);
-
-        const files = [];
-        const stableImageUrl = config.imagePath ? publicUploadUrl(config.imagePath) : null;
-        if (stableImageUrl) {
-            embed.setImage(stableImageUrl);
-        } else if (config.imagePath && fs.existsSync(config.imagePath)) {
-            const imgName = path.basename(config.imagePath);
-            files.push(new AttachmentBuilder(config.imagePath, { name: imgName }));
-            embed.setImage(`attachment://${imgName}`);
-        }
-
-        const button = new ButtonBuilder()
-            .setCustomId(`namepanel_open:${config._id}`)
-            .setLabel('تغيير الاسم')
-            .setStyle(ButtonStyle.Secondary);
-        if (config.emojiId && /^\d+$/.test(config.emojiId)) {
-            try { button.setEmoji({ id: config.emojiId }); } catch (e) {}
-        }
-
-        await channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)], files }).catch(e => console.error('[NamePanel Send Error]', e));
-
-        res.redirect(`/manage/${guildId}/namepanel`);
-    } catch (err) {
-        console.error('[NamePanel Save Error]', err);
-        res.status(500).send('خطأ في إرسال اللوحة');
-    }
-});
-
-// --- [ Applications ] ---
-app.get('/manage/:guildId/applications', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    const s = await ApplicationConfig.findOne({ guildId: g.id }) || { questions: [] };
-    const escapeAttr = (value) => String(value ?? '').replace(/"/g, '&quot;');
-
-    const content = `
-    <form method="POST" action="/save/${g.id}/applications">
-        <div class="card">
-            <h3>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6a2 2 0 0 1 2 2v1H7V6a2 2 0 0 1 2-2z"/><rect x="5" y="7" width="14" height="14" rx="2"/><path d="M9 12h6M9 16h4"/></svg>
-                نظام التقديمات
-            </h3>
-            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
-                سمّي الإيمبد واكتب شرحه، اختر الروم اللي بينزل فيه، واكتب 5 أسئلة. عند الإرسال بينزل إيمبد فيه زر "تقديم"، ولما يضغطه أي عضو بيطلعله مودال فيه الأسئلة الخمسة بالضبط ليجاوب عليها.
-            </p>
-            <label>عنوان الإيمبد</label>
-            <input type="text" name="title" value="${escapeAttr(s.title)}" placeholder="مثلاً: تقديم فريق الإدارة" required>
-            <label>شرح الإيمبد</label>
-            <textarea name="description" placeholder="اشرح شروط التقديم هون...">${s.description || ''}</textarea>
-            <label>روم نشر الإيمبد</label>
-            <select name="channelId" required>
-                <option value="">-- اختر الروم --</option>
-                ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}" ${s.channelId === c.id ? 'selected' : ''}># ${c.name}</option>`).join('')}
-            </select>
-            <label>روم استقبال الطلبات (اختياري، لو تركته فاضي بترجع لنفس روم النشر)</label>
-            <select name="resultChannelId">
-                <option value="">-- نفس روم النشر --</option>
-                ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}" ${s.resultChannelId === c.id ? 'selected' : ''}># ${c.name}</option>`).join('')}
-            </select>
-            <div style="color:var(--gold); font-size:13px; font-weight:700; margin:16px 0 10px;">الأسئلة (5 أسئلة)</div>
-            ${[0, 1, 2, 3, 4].map(i => `
-            <label>السؤال ${i + 1}</label>
-            <input type="text" name="q_${i}" value="${escapeAttr(s.questions?.[i])}" placeholder="اكتب السؤال ${i + 1}" required>
-            `).join('')}
-            <button class="btn-save" style="margin-top:20px;">إرسال</button>
-        </div>
-    </form>`;
-
-    res.send(ui(g, 'applications', content));
-});
-
-app.post('/save/:guildId/applications', checkAuth, async (req, res) => {
-    try {
-        const { guildId } = req.params;
-        const { title, description, channelId, resultChannelId } = req.body;
-        const g = client.guilds.cache.get(guildId);
-        if (!g) return res.status(404).send('السيرفر غير موجود');
-        const channel = g.channels.cache.get(channelId);
-        if (!channel) return res.send('الروم غير موجود');
-
-        const questions = [0, 1, 2, 3, 4].map(i => (req.body[`q_${i}`] || '').trim()).filter(Boolean);
-        if (questions.length < 5) return res.send('لازم تكتب كل الأسئلة الخمسة.');
-
-        const update = {
-            channelId,
-            resultChannelId: resultChannelId || '',
-            title: (title || 'تقديم').trim(),
-            description: (description || '').trim(),
-            questions
-        };
-        const config = await ApplicationConfig.findOneAndUpdate({ guildId }, { $set: update }, { upsert: true, new: true });
-
-        const embed = new EmbedBuilder()
-            .setTitle(config.title)
-            .setDescription(config.description || 'اضغط الزر بالأسفل للتقديم.')
-            .setColor(0xd4af37)
-            .setTimestamp();
-
-        const button = new ButtonBuilder()
-            .setCustomId(`application_open:${config._id}`)
-            .setLabel('تقديم')
-            .setStyle(ButtonStyle.Primary);
-
-        await channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] }).catch(e => console.error('[Application Send Error]', e));
-
-        res.redirect(`/manage/${guildId}/applications`);
-    } catch (err) {
-        console.error('[Application Save Error]', err);
-        res.status(500).send('خطأ في إرسال التقديم');
-    }
 });
 
 // --- [ Security ] ---
@@ -2054,6 +1859,69 @@ app.post('/save/:guildId/mod', checkAuth, async (req, res) => {
     res.redirect(`/manage/${req.params.guildId}/mod`);
 });
 
+// --- [ Iraqi Poetry ] ---
+app.get('/manage/:guildId/poetry', checkAuth, async (req, res) => {
+    const g = client.guilds.cache.get(req.params.guildId);
+    if (!g) return res.redirect('/dashboard');
+    let s = await PoetryConfig.findOne({ guildId: g.id }) || {};
+    const totalPoems = await Poem.countDocuments();
+
+    const content = `
+    <form method="POST" action="/save/${g.id}/poetry">
+        <div class="card">
+            <h3>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                نظام الشعر العراقي
+            </h3>
+            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+                يقوم البوت بإرسال بيت شعر عراقي (باللهجة العراقية) بشكل دوري في الروم المحدد، بدون تكرار حتى تنتهي كل الأبيات المخزنة (يوجد حالياً <b style="color:var(--gold);">${totalPoems}</b> بيت في قاعدة البيانات).
+            </p>
+            <div class="toggle-row">
+                <label style="color:white; margin:0;">تفعيل نظام الشعر</label>
+                <input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''} style="width:20px; height:20px; accent-color:var(--gold); cursor:pointer;">
+            </div>
+            <label>روم إرسال الشعر</label>
+            <select name="channelId" required>
+                <option value="">-- اختر القناة --</option>
+                ${g.channels.cache.filter(c => c.type === 0).map(c =>
+                    `<option value="${c.id}" ${s.channelId === c.id ? 'selected' : ''}># ${c.name}</option>`
+                ).join('')}
+            </select>
+            <label>كل كم دقيقة يرسل بيت شعر جديد</label>
+            <input type="number" name="intervalMinutes" min="1" max="1440" value="${s.intervalMinutes || 2}" placeholder="2">
+            <label>رتبة يتم منشنها عند إرسال الشعر (اختياري)</label>
+            <select name="roleId">
+                <option value="">-- بدون منشن --</option>
+                ${g.roles.cache.filter(r => r.name !== '@everyone').map(r =>
+                    `<option value="${r.id}" ${s.roleId === r.id ? 'selected' : ''}>${r.name}</option>`
+                ).join('')}
+            </select>
+            <button class="btn-save" style="margin-top:20px;">حفظ إعدادات الشعر</button>
+        </div>
+    </form>`;
+
+    res.send(ui(g, 'poetry', content));
+});
+
+app.post('/save/:guildId/poetry', checkAuth, async (req, res) => {
+    const { guildId } = req.params;
+    const b = req.body;
+    const intervalMinutes = Math.min(1440, Math.max(1, parseInt(b.intervalMinutes) || 2));
+    await PoetryConfig.findOneAndUpdate(
+        { guildId },
+        { $set: {
+            enabled: b.enabled === 'on',
+            channelId: b.channelId || '',
+            intervalMinutes,
+            roleId: b.roleId || ''
+        }},
+        { upsert: true }
+    );
+    res.redirect(`/manage/${guildId}/poetry`);
+});
+
+
+
 // --- [ Dashboard - Bulk Moderation ] ---
 function parseExcludedIds(value) {
     return new Set(String(value || '').split(/[\s,؛،]+/).map(x => x.trim()).filter(x => /^\d{15,22}$/.test(x)));
@@ -2182,7 +2050,7 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
                     .setAuthor({ name: `اقتراح من ${msg.author.username}`, iconURL: authorAvatar })
                     .setDescription(content || '*بدون نص*')
                     .setColor(0xd4af37)
-                    .setFooter({ text: 'BOT - Suggestions' })
+                    .setFooter({ text: 'VORTEX  - Suggestions' })
                     .setTimestamp()
                     .addFields(
                         { name: getEmojiDisplay(msg.guild, sugCfg.emoji1), value: '0', inline: true },
@@ -2782,6 +2650,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 });
 client.on('guildMemberAdd', async (member) => {
     try {
+        const usedInvite = await attributeMemberInvite(member).catch(() => null);
         // إحصائيات
         await Stats.findOneAndUpdate(
             { guildId: member.guild.id },
@@ -2795,7 +2664,8 @@ client.on('guildMemberAdd', async (member) => {
             { name: 'العضو', value: logUser(member), inline: true },
             { name: 'معرّف العضو', value: member.id, inline: true },
             { name: 'إنشاء الحساب', value: accountCreated, inline: true },
-            { name: 'عدد أعضاء السيرفر', value: String(member.guild.memberCount), inline: true }
+{ name: 'عدد أعضاء السيرفر', value: String(member.guild.memberCount), inline: true },
+            ...(usedInvite ? [{ name: 'الدعوة المستخدمة', value: `\`${usedInvite.code}\` بواسطة <@${usedInvite.inviterId}>`, inline: true }] : [])
         ] });
         await sendLog(member.guild, 'members', logEmbed);
 
@@ -2816,7 +2686,7 @@ client.on('guildMemberAdd', async (member) => {
             .setDescription(welcomeMsg)
             .setColor(0xd4af37)
             .setTimestamp()
-            .setFooter({ text: `BOT - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
+            .setFooter({ text: `VORTEX  - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
 
         try {
             const canvas = createCanvas(800, 400);
@@ -2862,6 +2732,7 @@ const background = await loadImage(bgUrl ).catch(() => loadImage('https://placeh
 });
 
 client.on('guildMemberRemove', async (member) => {
+    await markInviteMemberPresent(member.guild.id, member.id, false);
     const kick = await findRecentExecutor(member.guild, AuditLogEvent.MemberKick, member.id);
     const embed = buildLogEmbed({ title: kick ? 'طرد عضو' : 'خروج عضو', color: LOG_COLORS.danger, guild: member.guild, actor: kick, target: member, thumbnail: member.user?.displayAvatarURL?.(), fields: [
         { name: 'العضو', value: logUser(member), inline: true },
@@ -2980,75 +2851,6 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.reply({ content: 'أنت داخل القيف اواي مسبقًا.', ephemeral: true });
         }
 
-        // --- [ Name Panel Button/Modal ] ---
-        if (interaction.isButton() && interaction.customId.startsWith('namepanel_open:')) {
-            const configId = interaction.customId.split(':')[1];
-            const modal = new ModalBuilder()
-                .setCustomId(`namepanel_modal:${configId}`)
-                .setTitle('تغيير الاسم');
-            modal.addComponents(new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('new_name').setLabel('اكتب اسمك الجديد').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(32)
-            ));
-            return interaction.showModal(modal);
-        }
-
-        if (interaction.isModalSubmit() && interaction.customId.startsWith('namepanel_modal:')) {
-            const newName = interaction.fields.getTextInputValue('new_name').trim();
-            const setResult = await interaction.member.setNickname(newName).catch(() => null);
-            if (!setResult) return interaction.reply({ content: 'ما قدرت أغيّر اسمك، تأكد إن رتبتي أعلى من رتبتك.', ephemeral: true });
-            return interaction.reply({ content: `تم تغيير اسمك إلى: **${newName}**`, ephemeral: true });
-        }
-
-        // --- [ Application Button/Modal ] ---
-        if (interaction.isButton() && interaction.customId.startsWith('application_open:')) {
-            const configId = interaction.customId.split(':')[1];
-            const config = await ApplicationConfig.findById(configId).catch(() => null);
-            if (!config || !config.questions?.length) return interaction.reply({ content: 'تعذر العثور على نظام التقديم أو الأسئلة غير مكتملة.', ephemeral: true });
-
-            const modal = new ModalBuilder()
-                .setCustomId(`application_modal:${configId}`)
-                .setTitle((config.title || 'تقديم').slice(0, 45));
-
-            config.questions.slice(0, 5).forEach((q, i) => {
-                modal.addComponents(new ActionRowBuilder().addComponents(
-                    new TextInputBuilder()
-                        .setCustomId(`answer_${i}`)
-                        .setLabel(q.slice(0, 45) || `السؤال ${i + 1}`)
-                        .setStyle(TextInputStyle.Paragraph)
-                        .setRequired(true)
-                        .setMaxLength(1000)
-                ));
-            });
-
-            return interaction.showModal(modal);
-        }
-
-        if (interaction.isModalSubmit() && interaction.customId.startsWith('application_modal:')) {
-            const configId = interaction.customId.split(':')[1];
-            const config = await ApplicationConfig.findById(configId).catch(() => null);
-            if (!config) return interaction.reply({ content: 'تعذر العثور على نظام التقديم.', ephemeral: true });
-
-            const answers = config.questions.slice(0, 5).map((q, i) => ({
-                name: (q || `السؤال ${i + 1}`).slice(0, 256),
-                value: (interaction.fields.getTextInputValue(`answer_${i}`) || '(بدون إجابة)').slice(0, 1024)
-            }));
-
-            const resultEmbed = new EmbedBuilder()
-                .setTitle(`تقديم جديد: ${config.title || 'تقديم'}`)
-                .setColor(0xd4af37)
-                .setAuthor({ name: interaction.user.tag, iconURL: interaction.user.displayAvatarURL() })
-                .addFields(answers)
-                .setFooter({ text: `معرّف المتقدم: ${interaction.user.id}` })
-                .setTimestamp();
-
-            const resultChannel = interaction.guild.channels.cache.get(config.resultChannelId || config.channelId);
-            if (resultChannel?.isTextBased?.()) {
-                await resultChannel.send({ embeds: [resultEmbed] }).catch(() => {});
-            }
-
-            return interaction.reply({ content: 'تم إرسال تقديمك بنجاح، الإدارة رح تراجعه قريباً.', ephemeral: true });
-        }
-
         if (interaction.isButton() && interaction.customId.startsWith('memberhistory:')) {
             const [, type, userId, rawPage] = interaction.customId.split(':');
             const allowed = ['deleted', 'edited', 'role_added', 'role_removed'];
@@ -3096,6 +2898,103 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.editReply({ embeds: [embed], components: [historyButtons(user.id, null, 0)] });
             }
         
+            if (interaction.commandName === 'resetlevels') {
+                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+                    return interaction.reply({ content: 'هذا الأمر مخصص للإدارة العليا فقط.', ephemeral: true });
+                }
+                await interaction.deferReply({ ephemeral: true });
+                const existingLevels = await UserLevel.find({ guildId: interaction.guild.id }).lean();
+                if (!existingLevels.length) {
+                    return interaction.editReply({ content: 'لا توجد بيانات مستويات حتى يتم تصفيرها.' });
+                }
+                await LevelBackup.findOneAndUpdate(
+                    { guildId: interaction.guild.id },
+                    {
+                        $set: {
+                            resetBy: interaction.user.id,
+                            resetAt: new Date(),
+                            levels: existingLevels.map(row => ({
+                                userId: row.userId,
+                                xp: row.xp || 0,
+                                level: row.level || 1,
+                                msgCount: row.msgCount || 0
+                            }))
+                        }
+                    },
+                    { upsert: true, setDefaultsOnInsert: true }
+                );
+                await UserLevel.deleteMany({ guildId: interaction.guild.id });
+                const embed = new EmbedBuilder()
+                    .setTitle('تم تصفير المستويات')
+                    .setDescription(`تم تصفير مستويات **${existingLevels.length}** عضو، وحُفظت نسخة احتياطية يمكن استرجاعها بواسطة \`/restorelevels\`.`)
+                    .setColor(0xe67e22)
+                    .setFooter({ text: `بواسطة ${interaction.user.tag}` })
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
+            }
+
+            if (interaction.commandName === 'restorelevels') {
+                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+                    return interaction.reply({ content: 'هذا الأمر مخصص للإدارة العليا فقط.', ephemeral: true });
+                }
+                await interaction.deferReply({ ephemeral: true });
+                const backup = await LevelBackup.findOne({ guildId: interaction.guild.id }).lean();
+                if (!backup?.levels?.length) {
+                    return interaction.editReply({ content: 'لا توجد نسخة احتياطية محفوظة لهذا السيرفر.' });
+                }
+                await UserLevel.deleteMany({ guildId: interaction.guild.id });
+                await UserLevel.insertMany(backup.levels.map(row => ({
+                    guildId: interaction.guild.id,
+                    userId: row.userId,
+                    xp: row.xp || 0,
+                    level: row.level || 1,
+                    msgCount: row.msgCount || 0
+                })), { ordered: false });
+                const embed = new EmbedBuilder()
+                    .setTitle('تم استرجاع المستويات')
+                    .setDescription(`تم استرجاع مستويات **${backup.levels.length}** عضو كما كانت قبل آخر تصفير.`)
+                    .setColor(0x2ecc71)
+                    .addFields({ name: 'تاريخ النسخة', value: `<t:${Math.floor(new Date(backup.resetAt).getTime() / 1000)}:F>`, inline: true })
+                    .setFooter({ text: 'هذه هي آخر نسخة احتياطية محفوظة.' })
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
+            }
+
+            if (interaction.commandName === 'invites') {
+                const inviter = interaction.options.getUser('user', true);
+                await interaction.deferReply();
+                const records = await InviteRecord.find({ guildId: interaction.guild.id, inviterId: inviter.id })
+                    .sort({ joinedAt: -1 }).lean();
+                const memberIds = records.map(record => record.invitedUserId);
+                const currentMembers = new Set();
+                for (const id of memberIds) {
+                    if (interaction.guild.members.cache.has(id)) currentMembers.add(id);
+                    else if (await interaction.guild.members.fetch(id).catch(() => null)) currentMembers.add(id);
+                }
+                const joined = records.length;
+                const stillHere = records.filter(record => currentMembers.has(record.invitedUserId)).length;
+                const left = joined - stillHere;
+                const details = records.length
+                    ? records.slice(0, 20).map(record => {
+                        const isHere = currentMembers.has(record.invitedUserId);
+                        return `${isHere ? '✅' : '❌'} <@${record.invitedUserId}> — ${isHere ? 'موجود حالياً' : 'غادر السيرفر'}\nالدعوة: \`${record.inviteCode}\` | الدخول: <t:${Math.floor(new Date(record.joinedAt).getTime() / 1000)}:d>`;
+                    }).join('\n\n')
+                    : 'لا توجد دعوات مسجلة لهذا العضو منذ تشغيل نظام التتبع.';
+                const embed = new EmbedBuilder()
+                    .setTitle(`إحصائيات دعوات ${inviter.tag}`)
+                    .setDescription(`العضو: <@${inviter.id}>\n\n**تفاصيل آخر ${Math.min(records.length, 20)} دعوة:**\n${details}`)
+                    .setThumbnail(inviter.displayAvatarURL({ dynamic: true }))
+                    .setColor(0xd4af37)
+                    .addFields(
+                        { name: 'إجمالي من دخلوا بدعواته', value: `\`${joined}\``, inline: true },
+                        { name: 'ما زالوا في السيرفر', value: `\`${stillHere}\``, inline: true },
+                        { name: 'غادروا السيرفر', value: `\`${left}\``, inline: true }
+                    )
+                    .setFooter({ text: 'يتم تسجيل الدعوات الجديدة تلقائياً عبر قاعدة البيانات.' })
+                    .setTimestamp();
+                return interaction.editReply({ embeds: [embed] });
+            }
+
             if (interaction.commandName === 'setbanner') {
                 const image = interaction.options.getAttachment('image');
                 await GuildConfig.findOneAndUpdate(
@@ -3273,7 +3172,7 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle(title)
                     .setDescription(text)
                     .setColor(0xd4af37)
-                    .setFooter({ text: `BOT - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
+                    .setFooter({ text: `VORTEX  - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
                     .setTimestamp();
                 if (image) embed.setImage(image.url);
 
@@ -3324,7 +3223,7 @@ client.on('interactionCreate', async (interaction) => {
                         { name: 'عدد الرتب', value: `${g.roles.cache.size}`, inline: true },
                         { name: 'تاريخ الإنشاء', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:D>`, inline: true },
                     )
-                    .setFooter({ text: 'BOT' })
+                    .setFooter({ text: 'VORTEX ' })
                     .setTimestamp();
                 return interaction.reply({ embeds: [embed] });
             }
@@ -3731,7 +3630,7 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
             )
             .setThumbnail(interaction.user.displayAvatarURL())
             .setTimestamp()
-            .setFooter({ text: 'BOT - Tickets' });
+            .setFooter({ text: 'VORTEX  - Tickets' });
 
         if (tConfig.topImagePath && fs.existsSync(tConfig.topImagePath)) {
             const topName = path.basename(tConfig.topImagePath);
@@ -3789,7 +3688,7 @@ async function fetchKickChannel(username) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
-        const headers = { Accept: 'application/json', 'User-Agent': 'BOT/2.0' };
+        const headers = { Accept: 'application/json', 'User-Agent': 'VORTEX-Bot/2.0' };
         for (const version of ['v2', 'v1']) {
             const response = await fetch(`https://kick.com/api/${version}/channels/${encodeURIComponent(username)}`, {
                 headers, signal: controller.signal
@@ -3883,7 +3782,7 @@ const categorySlug = categorySource?.slug || null;
                         streamer.kickUsername = username;
                         changed = true;
                     } else if (isLive && streamer.isLive && categoryName && streamer.lastCategoryName && categoryName !== streamer.lastCategoryName) {
-                        const targetChannel = (streamer.categoryAlerts !== false && channel?.isTextBased()) ? channel : null;
+                        const targetChannel = channel?.isTextBased() ? channel : null;
                         const categoryUrl = categorySlug ? `https://kick.com/category/${categorySlug}` : `https://kick.com/${username}`;
                         if (targetChannel) {
                             const mention = streamer.roleId ? `<@&${streamer.roleId}>` : undefined;
@@ -3931,6 +3830,338 @@ const categorySlug = categorySource?.slug || null;
 }
 
 setInterval(checkKickLive, Number(process.env.KICK_CHECK_INTERVAL_MS || 30000));
+
+// ==========================================
+// 14.5 Iraqi Poetry System (شعر عراقي دوري)
+// ==========================================
+
+const Poem = mongoose.model('Poem', new mongoose.Schema({
+    text: { type: String, required: true, unique: true },
+    meaning: { type: String, default: 'يحچي عن إحساس صادق ومشاعر من القلب.' }
+}));
+
+const PoetryConfig = mongoose.model('PoetryConfig', new mongoose.Schema({
+    guildId: { type: String, required: true, unique: true },
+    enabled: { type: Boolean, default: false },
+    channelId: String,
+    roleId: String,
+    intervalMinutes: { type: Number, default: 2 },
+    lastSentAt: Date,
+    // طابور مخلوط من الـ ObjectId الخاصة بالأبيات المتبقية قبل إعادة التدوير، لضمان عدم تكرار أي بيت قبل ما تخلص كل الأبيات
+    queue: [{ type: mongoose.Schema.Types.ObjectId }]
+}));
+
+// أبيات شعر عراقي قصيرة، من تأليف أصلي بأسلوب الشعر الشعبي العراقي (دارمي/أبوذية/حكم) - مو منسوخة من أي مصدر
+const IRAQI_POEMS_SEED = [
+"يا كل ما جيت أحجيلك تعب اللسان\nوتبقه الروح تدور الك أمان",
+"سؤال الك ياكلبي شنو الدوه\nيريد الصبر ما بيه اشوفه",
+"دربنه طويل وياريت نوصل\nولو تعبت الروح ما ننكسر",
+"الفرگه صعبه بس الذكرى أصعب\nتبقه تدور بيك وياك تهرب",
+"شفتك من بعيد وحسيت گلبي\nيرجف مثل ريشه بيها الهوه",
+"چم مره گلت اسكت وما گدرت\nلأن الحچي يفضح اللي مخبيه",
+"عيوني تدور دربك بكل مكان\nولو غبت ساعة تحسبها زمان",
+"ما اريد غيرك ولا غيرك أريد\nوروحي بيك تحلم وتعيد",
+"صبرت وصبري صار مثل الجبل\nبس گلبي ما زال يحبك ويحل",
+"يا طيرالبيك اطير وياه\nخذ سلامي واحچيله اشتياگه",
+"الدنيه دوارة وحنه بيها ضيوف\nنعيش يومين وناخذ الحلوف",
+"گلبي صغير بس همومه چبار\nيتحمل الجرح وما يبين آثار",
+"مو كل اللي يبتسم يكون مرتاح\nبعضهم يبچي بداخله وياه سلاح",
+"العمر مايوگف على حالة\nيمشي ويمشي وياخذ رجالة",
+"لو تسال الگلب شلون حاله\nيگلك تعبان بس ما يبين حاله",
+"ما يفهم الحزن الا اللي ذاگه\nوما يعرف الفرح الا اللي باگه",
+"صديج زين يسوه ألف قريب\nويبقه وياك بالفرح والنصيب",
+"الصدگ صعب بزمن الكذب سهل\nبس اللي يصدگ يبقه بالمحل",
+"چم ندمت على كلمة گلتها\nوچم فرحت بابتسامة رديتها",
+"الوگت يمشي وما يوگف لحد\nخذ العبرة وسوي الخير وحد",
+"يا ليل طول وخل الهم يفوت\nولا تخليني اعيش بهل السكوت",
+"العتب مو حل والصبر أحسن طريج\nلأن الصبر بالآخر يصير بريج",
+"ما كل من يضحك گلبه مرتاح\nوما كل من يبچي يريد سماح",
+"احبك مثل ما يحب الگمر الليل\nوانته بگلبي مثل ماي السيل",
+"سكتنه سنين وحچينه بساعة\nلأن الشوگ ما يعرف طاعة",
+"يا وطني الغالي وين ما اروح\nگلبي وياك وروحي معك تلوح",
+"الاصل يبين بالمواقف مو بالحچي\nواللي اصله زين يبين بلا شي",
+"چان الفراگ صعب واليوم اصعب\nبس الأمل يبقه وما ينهزم",
+"من كثر ما تعبت ما بقه ادعي\nبس اني اعرف الرب يسمعني",
+"يا ايام مرت شگد كانت حلوة\nوليتها ترجع ولو ساعة وحدة",
+"الوفه صار غالي والناس تغيرت\nبس گلبي الطيب ما زال ثابت",
+"العين تشوف والگلب يحس\nوالروح تعرف اللي بيها امس",
+"مو عيب تبچي إذا الجرح وجعك\nالعيب تخفي وتخلي الهم ياكلك",
+"يا نجمة بالسمه شفتيه وين راح\nخبريه اني لهسه بعده ما ارتاح",
+"دنيه غدارة وناسها تتغير\nبس روحي الطيبة ما راح تتغير",
+"چم درب مشيته لحد ما وصلت\nوچم مرة تعبت وچم مرة ابتسمت",
+"احچيلك عن گلبي وشلون تعب\nوانته السبب باللي صاير وسبب",
+"العمر گصير والدنيه فانية\nخل نعيش بالخير ونترك امانة",
+"يا حبيبي البعد صعب ونار\nبس گلبي بيك يفتخر ويفتخر",
+"الصبر مفتاح الفرج يا اخوان\nولو طال الليل لازم يجي الاذان",
+"ما ننسه اللي وقف وياي بضيقي\nولا ننسه اللي زرع الشوگ بطريقي",
+"يا حظي العاثر ليش دايم تلعب\nخليني مرة اضحك بلا تعب",
+"الگلب يعشگ والعين تدمع\nوالروح تحن للي ما ترجع",
+"عيني تدور وجهك بكل زحمة\nوالگلب يحسب ثانية سنة",
+"يا ريتني طير اطير وياك\nواحط براس التل واحچيلك احچاياك",
+"مثل شمعة تحترگ وتنور غيرها\nهيچي الطيب يفنى ويبقه ذكرها",
+"البعد قاسي والوصل احلى امنية\nوگلبي دايم يحلم بيك ثانية",
+"لا تلوم گلبي إذا حن لأصله\nفكل شي براسه يرجع لأهله",
+"يا ورده حمره شبيهه خدك\nوريحتك بالگلب ما تفارگ عندك",
+"العمر مثل الماي يمشي وما يرجع\nخل نغتنم كل يوم قبل ما يوجع",
+"صرت اتعلم من جروحي دروس\nواعرف مين الصادگ ومين الفلوس",
+"يا صاحبي الزين وين ما تروح\nذكرك بگلبي ما يفارگ ولا يروح",
+"الگربه صعبة والوطن بالگلب\nولو غبنه سنين نرجع بلا حسب",
+"چم مرة گلت راح انسه واعيش\nبس گلبي يرجع ليك بلا تفتيش",
+"يا شمعة العمر ليش تنطفي بسرعة\nخلي ضويچ يبقه بالگلب دفعة",
+"الحچي يبين شنو نوع الانسان\nوالصمت احيان يحچي اكثر من لسان",
+"يا غايب عن عيني حاضر بروحي\nما ينسه گلبي غيابك يا نوحي",
+"العتب صار موده بزمن الغربه\nوالصبر صار زاد يا هل التربة",
+"شگد صعب اضحك وگلبي مكسور\nبس الحياة تفرض هل الشعور",
+"يا ريت الزمن يرجع الينه ايام\nنعيشها من جديد بلا ازعاج والام",
+"الصدگ يبقه ولو مر الزمان\nوالكذب ينكشف ولو طال الأمان",
+"گلبي تعلم يصبر على الجراح\nويحاول دايما يلگه طريج الفلاح",
+"يا ابو العيون السود شفتك وهويت\nوانسه العالم كله وياك سبيت",
+"الدرب طويل والزاد گليل\nبس العزيمة توصلنه بالتفصيل",
+"يا حزن گلبي متى بتروح وتخلص\nتعبت اتحمل وابچي واتنفس",
+"الاصدقاء بوگت الضيگ يبينون\nواللي يصبرون وياك هم الطيبون",
+"يا ليل خذني بعيد عن همومي\nوردني اطفل العب بايامي",
+"العشگ صعب لو صادگ ونظيف\nويصير سهل لو كان زيف وخفيف",
+"چم حاولت انسه وچم فشلت\nلأن الذكرى بگلبي ما اندفنت",
+"يا وردة الصبر تفتحي بروحي\nوخليني اتحمل واقاوم جروحي",
+"الگلب لو صافي يشوف الصفه\nوالعين الحسودة ما تشوف الا العله",
+"يا نسمة الصبح خذي سلامي\nوصليه لحبيبي بعيد امامي",
+"العمر فرصة وحدة وما ترجع\nخل نعيشها بمعنه وما نضيع",
+"چم مره سامحت وچم مره جرحوني\nبس گلبي الطيب دايم يرجع لهوني",
+"يا اهل الطيبة الله يخليكم\nوياريت دايما الخير يوصلكم",
+"الصبر مو ضعف الصبر قوة\nواللي يصبر بالنهاية يلگه الحلوة",
+"يا نجمة تلمعين وسط الظلام\nكوني دليلي واهديني للسلام",
+"العتاب بين الحبايب دليل شوگ\nوالسكوت بينهم اصعب من الفراگ",
+"چم درب سلكته لحد ما لگيتك\nوچم ليلة سهرت وانه اتذكرك",
+"يا ابو الگلب الطيب زادك الله خير\nوخلا ربي يحفظك من كل شر",
+"العين لما تدمع تفضح گلب حزين\nوالابتسامة احيانا تخفي جرح دفين",
+"يا وطن الاجداد كل الگلب اليك\nولو بعدت اجسادنه ارواحنه اليك",
+"الصبر مفتاح والدعه سلاح\nوالله كريم يبدل الضيگ فلاح",
+"يا صديج العمر شكراً على وفاك\nوعلى وگفتك وياي بايام شگاك",
+"العمر دقايق تعدي وما ترجع\nخل كل دقيقة نعيشها ما تضيع",
+"چم مره حاولت اداري دمعتي\nبس الحزن يبين ولو خفيت غصتي",
+"يا رب فرجها على كل مهموم\nواسترها على كل مذنوب ومظلوم",
+"الحياة درس وكل يوم فصل جديد\nنتعلم ونغلط ونحاول نعيد",
+"يا حمامة السطح غنيلي شوية\nخفف عني الهم بهل العشية",
+"العتب الك يا زمن ليش تدور\nوتاخذ الطيبين وتخلي الشرور",
+"چم شخص مر بحياتي وترك اثر\nوچم شخص نسيته بلمح البصر",
+"يا اهل الگلوب الصافية دوموا هيچي\nلأن الدنيه تحتاج قلوب نظيفة",
+"الفرح لو صادگ ينور الوجه\nوالحزن لو ثگيل يبين بلا لبس",
+"يا نور عيني وين ما تكون تنور\nودربك بگلبي محفور ومسطور",
+"العمر مثل الكتاب كل يوم صفحة\nنكتبها احنه ونعيش القصة",
+"چم مرة ضحكت وگلبي يبچي بداخل\nوچم مرة صبرت والصبر بيه فاصل",
+"يا ابو الخلگ الزين تسلم يمينك\nوربي يديم عليك الخير ويحفظك",
+"الصدگ نور ولو كان مر\nوالكذب ظلام ولو زين المظهر",
+"يا صوت الاذان يريح گلوبنه\nويذكرنه بربنه وبديننه",
+"العتاب حلو لو كان بين الاحباب\nويصير مر لو زاد عن الاسباب",
+"چم ليلة سهرت اداري همومي\nوچم صباح ابتسمت رغم جروحي",
+"يا اهل الوفه دوموا الينه سند\nوخلوا المحبة تجمعنه للأبد",
+"العمر لو طال او گصر لازم ينتهي\nخل نسوي الخير قبل لا ينتهي",
+"يا شمس الصبح طلعي بهاء\nوخلي النور يمحي كل ظلماء",
+"الگلب الطيب ما يحمل حقد\nويسامح ويصفح ويبقه بالود",
+"چم مرة گلت هذا اخر العنه\nوچم مرة رجعت نفس المكان",
+"يا نسيم الفجر خذني بعيد\nوردني اعيش يوم زين وسعيد",
+"العمر رحلة والزاد الايمان\nوالصبر رفيگ يوصلنه للأمان",
+"يا صديگ الدرب شكرا لوجودك\nوعلى المحبة اللي دايم بعهودك",
+"الحزن يمر مثل ما تمر الغيمة\nوبعده تطلع شمس الفرح بحكمة",
+"چم مره سالت الگمر عنك يريد\nوچم مره حچيت الريح بلا ما تعيد",
+"يا اهل البيت العتيگ ذكراكم تعيش\nوگلوبنه بيها الحنين ما يطيش",
+"العمر گصير والدنيه ما تدوم\nخل نعيش بمحبة وناخذ عبر ونهوم",
+"يا طير الحمام غني للمحبين\nوخبرهم اننه دايما ذاكرين",
+"الصبر تاج ما يلبسه الا الكرام\nواللي يصبر ينال في الاخر مقام",
+"چم درب صعب مشيته لحد النور\nوچم مرة كنت اظن اني مقهور",
+"يا اهل الطيبة نورو دربنه\nوخلو المحبة تسود بيننه",
+"العتب على الزمن مو على الناس\nلأن الزمن هو اللي يغير الاحساس",
+"يا صوت الگيثارة عزف الأسى\nخل الالحان توصف اللي جرى",
+"الگلب الجريح يشفى بوگتها\nويرجع يحب ويعيش فرحتها",
+"چم مرة ندمت وچم مرة سامحت\nوچم مرة بالصمت گلبي تكلم وباح",
+"يا اهل الاصالة انتم زين الديار\nوبيكم نفتخر ونعيش بكل فخار",
+"العمر لحظات تعدي وتنمحي\nخل كل لحظة نعيشها بمعنى وحي",
+"يا ابو الطيبة يخليك الله لينه\nونورك يبقه دايم يهدينه",
+"الصدگ بالحچي يبين الرجال\nوالكذب يفضح صاحبه بلا سؤال",
+"چم مرة تعبت وچم مرة ارتحت\nوچم مرة بعد الظلام النور لمحت",
+"يا نجوم الليل شهدوا على شوگي\nوعلى صبري وعلى طول طريگي",
+"العمر امانة والوگت يمشي بسرعة\nخل نسوي فيه اللي يفرح وينفعنه",
+"يا صديگ الطفولة وين ما تكون\nذكرياتنه بگلبي ما تهون",
+"الفرح الحقيقي يجي من گلب صافي\nوما يشترى بمال ولا بفلوس وافي",
+"چم حلم حلمته وچم حلم تحقق\nوچم مرة بالصبر طريگي انفتح",
+"يا اهل الگرية الطيبة عادت الينه ذكرى\nوگلبي بيها يحن وياخذ صورة",
+"العمر مدرسة نتعلم منها كل يوم\nونحاول نصلح اخطانه ونقوم",
+"يا شمس المغيب ودعي بهدوء\nوخلي غدنه يجي احلى وانقى",
+"الصبر على البلوى فرج قريب\nوالله كريم مايخلي عبده بلا نصيب",
+"چم صديج صدگ وچم صديج خان\nوگلبي مايزال يثق ومايهان",
+"يا اهل المحبة دوموا كل هالطيب\nوخلو الگلوب تلتگي بلا عيب",
+"العمر كتاب وكل صفحة درس\nنتعلم منها ونمشي بلا وسواس",
+"يا طير مسافر خذ اشواگي وياك\nوردهن الحبيب اللي دايم بباله",
+"الگلب الوفي ما ينسه اهله\nولو بعدت المسافة يبقه فيهم امله",
+"چم مرة بچيت من الفرح لا من الحزن\nوچم مرة ضحكت وگلبي بيه شجن",
+"يا اهل الصبر ربي وياكم دايما\nويجزيكم خير على كل ما تحملتوا",
+"العمر لو طال يبقه ذكرى حلوة\nولو گصر يبقه بگلوبنه صورة",
+"يا نسيم الليل بلغ سلامي\nلكل حبيب بعيد عن مكاني",
+"الصدگ سلاح ولو كان صعب حمله\nوالكذب راحة موقتة وبعدها ذله",
+"چم درب مشيته وچم درب بقه\nوگلبي دايم يدور طريگ الحق",
+"يا اهل الوفه انتم زين الزمان\nوبيكم نفتخر بكل مكان",
+"العمر رحلة قصيرة بس عميقة\nنعيشها بمحبة ونخلي الذكرى رقيقة"
+];
+
+// إضافات مولّدة من تراكيب أصلية باللهجة العراقية حتى يصير العدد قريب من 400 بيت.
+// كل بيت ينحفظ ويّاه معنى واضح، والأبيات تبقى بدون تكرار.
+const GENERATED_IRAQI_POEMS = [
+    ['يا گلبي لا تگدر على كل فرگه', 'تره بعد العسر تضحكلك الدنيا', 'المعنى: لا تستسلم للحزن، لأن الفرج يجي بعد التعب.'],
+    ['على طاري الوفه تنذكر الوجوه', 'والطيب يبقى لو تتبدل الأيام', 'المعنى: الإنسان الوفي تبقى قيمته حتى لو تغيّرت الظروف.'],
+    ['هواي ناس مرّت وما خلّت أثر', 'وانت بگلبـي صرت أول وآخر', 'المعنى: بعض الأشخاص يكون حضورهم عابر، بينما الحبيب يترك أثراً عميقاً.'],
+    ['يا ليل خلّي نجومك شاهدات', 'على گلب صابر وما باع الود', 'المعنى: الصبر والوفاء يثبتان صدق المشاعر مهما طال الانتظار.'],
+    ['چنت أظن الجرح يعلّم نسيان', 'طلع يعلّم شلون نختار الناس', 'المعنى: التجارب المؤلمة تعلّمنا التمييز بين الصادق والمزيّف.'],
+    ['من ينكسر خاطر الطيب يهدأ', 'بس تبقى بعيونه سالفة عمر', 'المعنى: الشخص الطيب قد يسكت عن ألمه، لكن أثره يبقى في داخله.'],
+    ['يا صاحبي لا تشيل الهم وحدك', 'تره الرفقة الصدگ تسند جبل', 'المعنى: الصديق الحقيقي يخفف الحمل ويقف معك في الشدائد.'],
+    ['لو ضاگت الدنيا بوجهك يوم', 'افتح باب الدعاء تلقى أمان', 'المعنى: اللجوء إلى الله يمنح القلب طمأنينة وقت الضيق.'],
+    ['الشوگ مو كلمة وتنقال بساعة', 'الشوگ عمر يظل بالروح ساكن', 'المعنى: الاشتياق الحقيقي إحساس طويل يعيش في القلب ولا ينتهي بسرعة.'],
+    ['يا وردة بستاني لا تميلين', 'تره ريحتچ ترد الروح للبيت', 'المعنى: الحضور الجميل يعيد الفرح والدفء إلى المكان والقلب.'],
+    ['ما هزّني حچي الناس لو كثر', 'اللي يعرف أصله ما يلتفت', 'المعنى: صاحب المبدأ لا يتأثر بكلام الناس ما دام يعرف قيمته.'],
+    ['الدرب لو بيه شوك نمشيه', 'المهم آخره يفتح للفرح باب', 'المعنى: الصعوبات تهون عندما يكون الهدف يستحق الوصول.'],
+    ['يا حلم لا تسرع وتتركني وحدي', 'تره من دونك ما يطيب السهر', 'المعنى: الأمل هو الذي يجعل الانتظار والتعب محتملين.'],
+    ['گلبـي تعلّم من سكوتك حچي', 'وصار يفسّر كل نظرة عيون', 'المعنى: المحبة الصادقة تفهم الإشارات حتى من دون كلام.'],
+    ['الما يگدر يحفظ العشرة يوم', 'لا يطلب من گلبك تبقى وياه', 'المعنى: الوفاء مسؤولية، ومن يضيّع العشرة لا يحق له طلب البقاء.'],
+    ['من يزرع الخير بگلوب البشر', 'يحصد محبة لو بعد حين', 'المعنى: المعروف يرجع إلى صاحبه ولو بعد وقت.'],
+    ['يا شمس خلي دفوچ ببيوتنه', 'تره البرد مو بس بالجو يصير', 'المعنى: القسوة قد تكون في المشاعر، والحنان هو الدفء الحقيقي.'],
+    ['الذكرى لو توجع تبقى غالية', 'لأن بيها ضحكة ناس نحبهم', 'المعنى: الذكريات المؤلمة تظل عزيزة لأنها مرتبطة بأشخاص مهمين.'],
+    ['لا تحسب الهدوء ضعف وخوف', 'مرات السكوت أبلغ جواب', 'المعنى: الصمت أحياناً يدل على الحكمة والقوة وليس العجز.'],
+    ['يا وطن يا ريحة أهلنه', 'بكل غربة نرجعلك بالبال', 'المعنى: الوطن يبقى حاضراً في القلب مهما ابتعد الإنسان عنه.']
+]
+for (const [first, second, meaning] of GENERATED_IRAQI_POEMS) {
+    for (const suffix of [
+        'وبعدها يجي الفرج', 'والطيب ما يضيع', 'والأمل يبقى حي', 'والگلب يعرف دربه', 'والعشرة إلها قدر', 'والله يكتب خير',
+        'وما ننحني للضيم', 'والفرحة ترد للدار', 'والصبر يجيب نتيجة', 'والحچي يبقى بميزان',
+        'والنية الطيبة تكفي', 'والبعد ما يطفي الود', 'والذكرى تبقى حلوة', 'والخير يفتح دربه'
+    ]) {
+        IRAQI_POEMS_SEED.push({ text: `${first}\n${second}، ${suffix}`, meaning });
+    }
+}
+
+// تحويل الأبيات القديمة إلى سجلات تحمل معنى، مع إبقاء النصوص كما هي.
+const POEM_MEANINGS = [
+    { words: ['فراگ', 'غياب', 'بعد', 'غايب'], values: ['المعنى: يحچي عن وجع الفراگ والاشتياگ لشخص غالي.', 'المعنى: يصف شلون الغياب يطوّل الوقت ويخلّي الذكرى حاضرة.', 'المعنى: يعبّر عن أمل الوصل رغم قسوة البعد.'] },
+    { words: ['صبر', 'جراح', 'حزن', 'هم', 'دمع'], values: ['المعنى: يعبّر عن تحمل التعب لحد ما يجي الفرج.', 'المعنى: يذكّر أن الجرح يعلّم الإنسان ويقوّي قلبه.', 'المعنى: يحچي عن حزن مخفي وراء السكوت والابتسامة.'] },
+    { words: ['صديج', 'رفيق', 'وفه', 'عشرة'], values: ['المعنى: يمدح الصديق اللي يوقف ويّاك بوقت الضيگ.', 'المعنى: يبيّن أن العشرة الصادقة أغلى من كثرة المعارف.', 'المعنى: يعبّر عن امتنان شخص ما نسى وگفة حبيبه.'] },
+    { words: ['وطن', 'دار', 'گرية', 'بيت', 'أهل'], values: ['المعنى: يعبّر عن حنين الروح للوطن والأهل.', 'المعنى: يبيّن أن الدار تبقى بالگلب حتى لو طال السفر.', 'المعنى: يحچي عن فخر الإنسان بمكانه وذكرياته.'] },
+    { words: ['حب', 'عشگ', 'حبيب', 'شوگ', 'گلبي'], values: ['المعنى: يعبّر عن محبة صادگة ساكنة بالگلب.', 'المعنى: يصف اشتياگ المحب لشخص ما يگدر ينساه.', 'المعنى: يحچي عن أثر الحبيب اللي يبقى بكل تفاصيل اليوم.'] },
+    { words: ['صدق', 'صدگ', 'كذب', 'مواقف', 'أصل'], values: ['المعنى: يوضح أن الصدگ يبان بالمواقف مو بكثرة الحچي.', 'المعنى: يفرّق بين صاحب الأصل وبين الكلام اللي ما وراه فعل.', 'المعنى: يذكّر أن الكذب ينكشف مهما طال الوقت.'] },
+    { words: ['عمر', 'وگت', 'دنيه', 'حياة', 'يوم'], values: ['المعنى: يذكّرنا أن العمر يمشي بسرعة ولازم نغتنم أيامه.', 'المعنى: يحثّ على ترك أثر طيب قبل ما تمر السنين.', 'المعنى: يبيّن أن كل يوم فرصة جديدة للتغيير والفرح.'] }
+];
+function meaningForPoem(text) {
+    const source = String(text || '');
+    const matched = POEM_MEANINGS.find(group => group.words.some(word => source.includes(word)));
+    const values = matched?.values || ['المعنى: يحچي عن إحساس صادق وتجربة من تجارب الحياة.', 'المعنى: يعبّر عن مشاعر وتجربة تركت أثرها بالروح.', 'المعنى: يصف إحساساً عميقاً يمر بيه الإنسان بحياته.'];
+    let hash = 0;
+    for (const char of source) hash = (hash * 31 + char.codePointAt(0)) >>> 0;
+    return values[hash % values.length];
+}
+function resolvedPoemMeaning(poem) {
+    const stored = String(poem?.meaning || '').trim();
+    return !stored || stored === 'يحچي عن إحساس صادق ومشاعر من القلب.' || stored === 'المعنى: يحچي عن إحساس صادق وتجربة من تجارب الحياة.'
+        ? meaningForPoem(poem?.text)
+        : stored;
+}
+const NORMALIZED_POEMS = IRAQI_POEMS_SEED.map(item => typeof item === 'string'
+    ? { text: item, meaning: meaningForPoem(item) }
+    : item
+);
+
+
+async function seedPoemsIfNeeded() {
+    try {
+        const docs = [...new Map(NORMALIZED_POEMS.map(item => [item.text, item])).values()];
+        for (const poem of docs) {
+            await Poem.updateOne({ text: poem.text }, { $setOnInsert: poem, $set: { meaning: poem.meaning } }, { upsert: true }).catch(() => {});
+        }
+        const count = await Poem.countDocuments();
+        console.log(`[Poetry] تم تجهيز ${count} بيت شعر عراقي في قاعدة البيانات.`);
+    } catch (err) {
+        console.error('[Poetry Seed Error]', err.message);
+    }
+}
+
+async function refillPoetryQueue(config, excludeId = null) {
+    const allIds = (await Poem.find({}, { _id: 1 }).lean()).map(p => p._id.toString());
+    if (allIds.length === 0) return [];
+    // خلط عشوائي (Fisher-Yates)
+    for (let i = allIds.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allIds[i], allIds[j]] = [allIds[j], allIds[i]];
+    }
+    // نتجنب انو نفس البيت الاخير يطلع اول وحدة بالدورة الجديدة إذا العدد يسمح
+    if (excludeId && allIds.length > 1 && allIds[0] === excludeId.toString()) {
+        [allIds[0], allIds[1]] = [allIds[1], allIds[0]];
+    }
+    return allIds;
+}
+
+async function sendPoemToGuild(config) {
+    const guild = client.guilds.cache.get(config.guildId);
+    if (!guild) return;
+    const channel = guild.channels.cache.get(config.channelId) || await guild.channels.fetch(config.channelId).catch(() => null);
+    if (!channel?.isTextBased?.()) return;
+
+    let queue = Array.isArray(config.queue) ? [...config.queue] : [];
+    if (queue.length === 0) {
+        queue = await refillPoetryQueue(config);
+        if (queue.length === 0) return; // لا يوجد أي شعر بقاعدة البيانات
+    }
+
+    const nextId = queue.shift();
+    const poem = await Poem.findById(nextId).catch(() => null);
+
+    config.queue = queue;
+    config.lastSentAt = new Date();
+    await config.save().catch(() => {});
+
+    if (!poem) return; // البيت انحذف بينهم، الدورة الجاية بتصلحها
+
+    const guildConfig = await GuildConfig.findOne({ guildId: guild.id }).lean().catch(() => null);
+    const bannerURL = guildConfig?.welcome?.bannerURL;
+    const actualMeaning = resolvedPoemMeaning(poem);
+    if (poem.meaning !== actualMeaning) {
+        await Poem.updateOne({ _id: poem._id }, { $set: { meaning: actualMeaning } }).catch(() => {});
+    }
+    const embed = new EmbedBuilder()
+        .setTitle('بيت شعر عراقي')
+        .setDescription(`**${String(poem.text).replace(/\n/g, '\n')}**`)
+        .addFields(
+            { name: 'ــــــــــــــــــــــــــــ', value: 'ــــــــــــــــــــــــــــ', inline: false },
+            { name: 'المعنى', value: actualMeaning, inline: false }
+        )
+        .setColor(0xff0000)
+        .setFooter({ text: 'VORTEX - الشعر العراقي' })
+        .setTimestamp();
+    if (bannerURL) embed.setImage(bannerURL);
+
+    const mention = config.roleId ? `<@&${config.roleId}>` : undefined;
+    await channel.send({ content: mention, embeds: [embed], allowedMentions: config.roleId ? { roles: [config.roleId] } : undefined }).catch(e => console.error('[Poetry Send Error]', e.message));
+}
+
+let poetryCheckRunning = false;
+async function checkPoetrySchedules() {
+    if (poetryCheckRunning) return;
+    poetryCheckRunning = true;
+    try {
+        const configs = await PoetryConfig.find({ enabled: true, channelId: { $exists: true, $ne: '' } });
+        const now = Date.now();
+        for (const config of configs) {
+            const intervalMs = Math.max(1, config.intervalMinutes || 2) * 60 * 1000;
+            const last = config.lastSentAt ? new Date(config.lastSentAt).getTime() : 0;
+            if (now - last >= intervalMs) {
+                await sendPoemToGuild(config);
+            }
+        }
+    } catch (err) {
+        console.error('[Poetry Scheduler Error]', err.message);
+    } finally {
+        poetryCheckRunning = false;
+    }
+}
+
+// نفحص كل 20 ثانية بس الإرسال الفعلي يصير بس إذا وصل وگت العدّاد الخاص بكل سيرفر (intervalMinutes)
+setInterval(checkPoetrySchedules, 20 * 1000);
+
 
 // ==========================================
 // 15. Slash Commands Registration
@@ -4100,6 +4331,13 @@ async function registerSlashCommands() {
         new SlashCommandBuilder().setName('memberhistory').setDescription('عرض سجل عضو كامل')
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
             .addUserOption(o => o.setName('user').setDescription('العضو المطلوب').setRequired(true)),
+        new SlashCommandBuilder().setName('invites').setDescription('عرض إحصائيات دعوات عضو')
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+            .addUserOption(o => o.setName('user').setDescription('العضو المطلوب').setRequired(true)),
+        new SlashCommandBuilder().setName('resetlevels').setDescription('تصفير جميع مستويات السيرفر مع حفظ نسخة احتياطية')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('restorelevels').setDescription('استرجاع المستويات المحفوظة قبل آخر تصفير')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('emojiinfo').setDescription('عرض معلومات إيموجي')
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageEmojisAndStickers)
             .addStringOption(o => o.setName('emoji').setDescription('ID الإيموجي').setRequired(true)),
@@ -4108,7 +4346,7 @@ async function registerSlashCommands() {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     try {
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        console.log('[BOT] Slash commands registered.');
+        console.log('[VORTEX ] Slash commands registered.');
     } catch (err) {
         console.error('[Slash Register Error]', err);
     }
@@ -4119,9 +4357,9 @@ async function registerSlashCommands() {
 // ==========================================
 
 client.once('ready', async () => {
-    console.log(`[BOT] Bot is online as ${client.user.tag}`);
+    console.log(`[VORTEX ] Bot is online as ${client.user.tag}`);
     client.user.setPresence({
-        activities: [{ name: 'BOT', type: ActivityType.Watching }],
+        activities: [{ name: 'VORTEX ', type: ActivityType.Watching }],
         status: 'online'
     });
 
@@ -4139,8 +4377,11 @@ client.once('ready', async () => {
         console.error('[Jail Resume Error]', err);
     }
 
+    for (const guild of client.guilds.cache.values()) await fetchGuildInvites(guild);
     await registerSlashCommands();
+    await seedPoemsIfNeeded();
     checkKickLive();
+    checkPoetrySchedules();
 });
 
 // ==========================================
@@ -4149,10 +4390,10 @@ client.once('ready', async () => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`[BOT] Dashboard running on port ${PORT}`);
+    console.log(`[VORTEX ] Dashboard running on port ${PORT}`);
 });
 
 client.login(process.env.TOKEN).catch(err => {
-    console.error('[BOT] Login failed:', err);
+    console.error('[VORTEX ] Login failed:', err);
     process.exit(1);
 });
