@@ -559,13 +559,6 @@ const checkAuth = (req, res, next) => {
     res.redirect('/login');
 };
 
-const checkDashboardOwner = (req, res, next) => {
-    const ownerId = String(process.env.DASHBOARD_OWNER_ID || '').trim();
-    if (!ownerId) return res.status(500).send('DASHBOARD_OWNER_ID غير مضبوط في متغيرات البيئة.');
-    if (String(req.user?.id || '') !== ownerId) return res.status(403).send('هذا الحساب غير مخول لدخول لوحة التحكم.');
-    next();
-};
-
 const checkBotGuildAccess = (req, res, next) => {
     if (!client.guilds.cache.has(req.params.guildId)) return res.status(404).send('البوت غير موجود في هذا السيرفر.');
     next();
@@ -582,11 +575,11 @@ const checkGuildAccess = (req, res, next) => {
     next();
 };
 
-// The dashboard owner may view and configure every guild where the bot is present.
+// Any authenticated Discord user may access and configure guilds where the bot is present.
 // Discord permissions are still checked separately before each bot action.
-app.use('/manage/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/save/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/delete-kick/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
+app.use('/manage/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/save/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess);
 
 app.get('/auth/discord', passport.authenticate('discord'));
 app.get('/callback', passport.authenticate('discord', { failureRedirect: '/login' }), (req, res) => {
@@ -611,7 +604,7 @@ body{margin:0;min-height:100vh;background:var(--ink);color:var(--text);font-fami
 @media(max-width:760px){body{overflow:auto;display:block;padding:18px 0}.login-shell{width:calc(100% - 28px);min-height:0;display:flex;flex-direction:column}.brand-panel{padding:34px 25px 30px;min-height:300px}.brand-panel h1{font-size:58px;letter-spacing:6px}.brand-panel p{font-size:12px;margin-top:14px}.brand-panel:after{font-size:220px;bottom:-22%}.login-panel{padding:32px 25px 36px}.login-panel h2{font-size:26px}.corner-mark{margin-top:35px}}
 </style>
 </head>
-<body><main class="login-shell"><section class="brand-panel"><div><div class="micro">Drayz System / CONTROL CENTER</div><h1>Drayz System</h1><p>مركز تحكم واحد لإدارة سيرفراتك، حماية مجتمعك، ومتابعة كل الأنظمة من واجهة مرتبة وسريعة.</p><div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div></div><div class="corner-mark">SYSTEM ONLINE · BUILD 2.0</div></section><section class="login-panel"><div class="panel-kicker">AUTHENTICATION REQUIRED</div><h2>أهلًا بك في مركز التحكم</h2><p>سجّل الدخول بحساب Discord المصرّح له للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p><a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a><div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div></section></main></body></html>`);
+<body><main class="login-shell"><section class="brand-panel"><div><div class="micro">Drayz System / CONTROL CENTER</div><h1>Drayz System</h1><p>مركز تحكم واحد لإدارة سيرفراتك، حماية مجتمعك، ومتابعة كل الأنظمة من واجهة مرتبة وسريعة.</p><div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div></div><div class="corner-mark">SYSTEM ONLINE · BUILD 2.0</div></section><section class="login-panel"><div class="panel-kicker">AUTHENTICATION REQUIRED</div><h2>أهلًا بك في مركز التحكم</h2><p>سجّل الدخول بحساب Discord للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p><a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a><div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div></section></main></body></html>`);
 });
 
 app.get('/ping', (req, res) => res.send('I am alive!'));
@@ -666,7 +659,7 @@ function ui(guild, active, content) {
 // --- [ Dashboard - Admin Commands ] ---
 
 // --- [ Dashboard - Server List ] ---
-app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
+app.get('/dashboard', checkAuth, (req, res) => {
     const botGuilds = [...client.guilds.cache.values()];
     const cards = botGuilds.map(g => {
         const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
@@ -1059,7 +1052,7 @@ app.get('/manage/:guildId/welcome', checkAuth, async (req, res) => {
     res.send(ui(g, 'welcome', content));
 });
 
-app.post('/generate/:guildId/welcome-random', checkAuth, checkDashboardOwner, checkBotGuildAccess, async (req, res) => {
+app.post('/generate/:guildId/welcome-random', checkAuth, checkBotGuildAccess, async (req, res) => {
     try {
         const filename = `welcome-generated-${req.params.guildId}-${Date.now()}-${Math.floor(Math.random() * 100000)}.png`;
         const absolutePath = path.join(__dirname, 'uploads', filename);
