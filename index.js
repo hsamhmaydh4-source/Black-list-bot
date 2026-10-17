@@ -8,7 +8,6 @@ const { createCanvas, loadImage } = require('canvas');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 const axios = require('axios');
 const ms = require('ms');
 const {
@@ -59,34 +58,9 @@ const TicketData = mongoose.model('TicketData', new mongoose.Schema({
     adminRole: String,
     categoryId: String,
     claimedBy: String,
-    claimedByName: { type: String, default: '' },
-    claimedAt: Date,
     openedAt: Date,
     closedAt: Date,
-    closedBy: String,
-    closedByName: { type: String, default: '' },
-    ownerName: { type: String, default: '' },
-    request: { type: String, default: '' },
-    credits: { type: String, default: '' },
-    rating: { type: Number, default: null },
-    ratingReason: { type: String, default: '' },
-    ratingNote: { type: String, default: '' },
-    soldProduct: { type: String, default: '' },
-    soldPrice: { type: String, default: '' },
-    ratingMessageId: { type: String, default: '' },
-    saleMessageId: { type: String, default: '' },
-    transcriptToken: { type: String, default: '' },
-    transcriptMessages: [{
-        messageId: String,
-        authorId: String,
-        authorName: String,
-        authorDisplayName: String,
-        avatarUrl: String,
-        content: String,
-        createdAt: Date,
-        attachments: [{ name: String, url: String }],
-        embeds: [{ title: String, description: String, url: String, color: String }]
-    }]
+    closedBy: String
 }));
 
 const UserLevel = mongoose.model('UserLevel', new mongoose.Schema({
@@ -109,30 +83,12 @@ const LevelBackup = mongoose.model('LevelBackup', new mongoose.Schema({
     }]
 }, { timestamps: false }));
 
-const ModConfig = mongoose.model('ModConfig', new mongoose.Schema({
-    guildId: String,
-    jail: {
-        commandName: { type: String, default: 'jail' },
-        unjailCommand: { type: String, default: 'unjail' },
-        roleId: String,
-        channelId: String,
-        adminRoles: [String]
-    }
-}));
-
 const Warn = mongoose.model('Warn', new mongoose.Schema({
     guildId: String,
     userId: String,
     reason: String,
     moderatorId: String,
     createdAt: { type: Date, default: Date.now }
-}));
-
-const JailData = mongoose.model('JailData', new mongoose.Schema({
-    guildId: String,
-    userId: String,
-    oldRoles: [String],
-    endAt: Date
 }));
 
 const GuildConfig = mongoose.model('GuildConfig', new mongoose.Schema({
@@ -154,12 +110,6 @@ const GuildConfig = mongoose.model('GuildConfig', new mongoose.Schema({
         levelUpChannel: String,
         leaderboardCommand: { type: String, default: '!levels' }
     },
-    rolesPanel: [{
-        roleId: String,
-        label: String,
-        type: { type: String, default: 'button' }
-    }],
-    rolesChannel: String,
     notificationRoles: {
         imagePath: String,
         channelIds: { type: [String], default: [] },
@@ -279,7 +229,6 @@ const TicketConfig = mongoose.model('TicketConfig', new mongoose.Schema({
     topImagePath: String,
     bottomImagePath: String,
     ticketCount: { type: Number, default: 0 },
-    evaluationChannelId: { type: String, default: '' },
     buttons: [{ label: String, emoji: String, adminRole: String, categoryId: String }],
     menuOptions: [{ label: String, emoji: String, adminRole: String, categoryId: String }]
 }));
@@ -288,51 +237,6 @@ const TicketConfig = mongoose.model('TicketConfig', new mongoose.Schema({
 // 2. Express App Setup
 // ==========================================
 const app = express();
-
-// ==========================================
-// Global safe error logging
-// ==========================================
-function redactSecrets(value) {
-    let text;
-    try {
-        text = typeof value === 'string' ? value : JSON.stringify(value);
-    } catch {
-        text = String(value);
-    }
-
-    return String(text)
-        .replace(/(client_secret|clientSecret|access_token|accessToken|refresh_token|refreshToken|authorization|password|token|secret|code)\s*[=:]\s*["']?[^,\s}"']+/gi, '$1=[REDACTED]')
-        .replace(/(mongodb(?:\+srv)?:\/\/[^\s]+|Bearer\s+[^\s]+)/gi, '[REDACTED]');
-}
-
-function errorDetails(error) {
-    if (!error) return null;
-    return {
-        name: error.name,
-        message: redactSecrets(error.message),
-        code: error.code,
-        status: error.status,
-        statusCode: error.statusCode,
-        stack: redactSecrets(error.stack),
-        data: redactSecrets(error.data),
-        oauthError: redactSecrets(error.oauthError),
-        response: error.response ? {
-            status: error.response.status,
-            statusText: error.response.statusText,
-            data: redactSecrets(error.response.data)
-        } : undefined
-    };
-}
-
-function logError(label, error, extra = {}) {
-    console.error(`[ERROR] ${label}`);
-    console.error(JSON.stringify({
-        time: new Date().toISOString(),
-        ...extra,
-        error: errorDetails(error)
-    }, null, 2));
-}
-
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.json());
 app.set('trust proxy', 1);
@@ -344,8 +248,6 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ==========================================
 // 3. تعريف الـ Client
 // ==========================================
-const pendingTicketOpens = new Map();
-
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -371,7 +273,7 @@ const commands = [
 // ==========================================
 mongoose.connect(process.env.MONGO_CONNECTION_STRING)
     .then(() => console.log('[DB] Connected to MongoDB'))
-    .catch(err => logError('MongoDB connection', err));
+    .catch(err => console.log('[DB] Connection Error:', err));
 
 // ==========================================
 // 5. الدوال المساعدة
@@ -623,42 +525,6 @@ function getEmojiDisplay(guild, emojiId) {
     return em ? em.toString() : `<:v:${emojiId}>`;
 }
 
-async function handleUnjail(member, guildId) {
-    try {
-        const guild = client.guilds.cache.get(guildId);
-        if (!guild || !member) return;
-
-        const jailData = await JailData.findOne({ guildId, userId: member.id });
-        const modConfig = await ModConfig.findOne({ guildId });
-
-        if (!jailData) return;
-
-        const rolesToRestore = (jailData.oldRoles || []).filter(rId => guild.roles.cache.has(rId));
-
-        if (modConfig?.jail?.roleId) {
-            await member.roles.remove(modConfig.jail.roleId).catch(() => {});
-        }
-
-        for (const roleId of rolesToRestore) {
-            await member.roles.add(roleId).catch(() => {});
-        }
-
-        await JailData.deleteOne({ guildId, userId: member.id });
-
-        const jailChannel = guild.channels.cache.get(modConfig?.jail?.channelId);
-        if (jailChannel) {
-            const embed = new EmbedBuilder()
-                .setTitle('فك السجن')
-                .setDescription(`تم فك سجن <@${member.id}> وتم استرجاع رتبه بنجاح.`)
-                .setColor(0x00ff88)
-                .setTimestamp();
-            jailChannel.send({ embeds: [embed] });
-        }
-    } catch (err) {
-        console.error('[Unjail Error]', err);
-    }
-}
-
 // ==========================================
 // 6. Upload Setup
 // ==========================================
@@ -685,7 +551,7 @@ passport.use(new Strategy({
 }, (accessToken, refreshToken, profile, done) => done(null, profile)));
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'VORTEX -secret-key-2026',
+    secret: process.env.SESSION_SECRET || 'Drayz System -secret-key-2026',
     resave: false,
     saveUninitialized: false
 }));
@@ -714,48 +580,15 @@ const checkGuildAccess = (req, res, next) => {
     next();
 };
 
-// Any authenticated Discord user may access the dashboard for guilds where the bot is present.
+// Any authenticated Discord user may access and configure guilds where the bot is present.
+// Discord permissions are still checked separately before each bot action.
 app.use('/manage/:guildId', checkAuth, checkBotGuildAccess);
 app.use('/save/:guildId', checkAuth, checkBotGuildAccess);
 app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess);
 
 app.get('/auth/discord', passport.authenticate('discord'));
-app.get('/callback', (req, res, next) => {
-    passport.authenticate('discord', (err, user, info) => {
-        if (err) {
-            logError('Discord OAuth callback / access-token exchange', err, {
-                method: req.method,
-                path: req.path,
-                queryKeys: Object.keys(req.query || {}),
-                hasCode: Boolean(req.query?.code),
-                hasError: Boolean(req.query?.error),
-                discordError: req.query?.error,
-                discordErrorDescription: req.query?.error_description,
-                passportInfo: redactSecrets(info)
-            });
-            return res.status(500).send('OAuth failed. Check Render logs for [ERROR] Discord OAuth callback.');
-        }
-
-        if (!user) {
-            console.error('[ERROR] Discord OAuth returned no user:', JSON.stringify({
-                time: new Date().toISOString(),
-                passportInfo: redactSecrets(info),
-                query: redactSecrets(req.query)
-            }, null, 2));
-            return res.status(401).send('Discord authentication was rejected. Check Render logs.');
-        }
-
-        req.logIn(user, loginError => {
-            if (loginError) {
-                logError('Passport session login', loginError, {
-                    path: req.path,
-                    userId: user?.id
-                });
-                return next(loginError);
-            }
-            return res.redirect('/dashboard');
-        });
-    })(req, res, next);
+app.get('/callback', passport.authenticate('discord', { failureRedirect: '/login' }), (req, res) => {
+    res.redirect('/dashboard');
 });
 
 app.get('/logout', (req, res) => {
@@ -767,48 +600,20 @@ app.get('/login', (req, res) => {
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VORTEX · الدخول</title>
+<title>Drayz System · الدخول</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#0b0a08;--panel:#17130e;--panel-2:#211a12;--gold:#f4c24c;--gold-2:#a86e13;--red:#dd5147;--text:#f6f0e5;--muted:#a19889;--line:rgba(244,194,76,.18)}
 *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--gold-2) #0f0d0a}*::-webkit-scrollbar{width:8px}*::-webkit-scrollbar-track{background:#0f0d0a}*::-webkit-scrollbar-thumb{background:linear-gradient(var(--gold),var(--gold-2));border-radius:20px}*::-webkit-scrollbar-button{display:none}
-body{margin:0;min-height:100vh;background:var(--ink);color:var(--text);font-family:'Cairo',sans-serif;display:grid;place-items:center;overflow:hidden}body:before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 12% 20%,rgba(244,194,76,.13),transparent 28%),radial-gradient(circle at 84% 76%,rgba(221,81,71,.09),transparent 24%),linear-gradient(135deg,#0b0a08,#160f0d 48%,#0b0a08)}body:after{content:'';position:fixed;inset:0;pointer-events:none;opacity:.24;background-image:linear-gradient(rgba(244,194,76,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(244,194,76,.08) 1px,transparent 1px);background-size:54px 54px;mask-image:linear-gradient(90deg,transparent,#000 22%,#000 78%,transparent)}.login-shell{position:relative;z-index:1;width:min(1040px,calc(100% - 48px));min-height:590px;display:grid;grid-template-columns:1.1fr .9fr;background:rgba(20,16,11,.78);border:1px solid var(--line);border-radius:28px;overflow:hidden;box-shadow:0 30px 100px rgba(0,0,0,.42)}.brand-panel{position:relative;padding:58px 52px;background:linear-gradient(145deg,rgba(244,194,76,.12),rgba(18,14,10,.82) 53%,rgba(221,81,71,.09));display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--line)}.brand-panel:after{content:'V';position:absolute;left:5%;bottom:-24%;font:900 360px 'IBM Plex Mono',monospace;color:rgba(244,194,76,.045);line-height:1}.micro{position:relative;z-index:1;color:var(--gold);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:2px}.brand-panel h1{position:relative;z-index:1;font-size:clamp(58px,8vw,105px);letter-spacing:10px;line-height:.9;margin:0;background:linear-gradient(115deg,#fff0b0 8%,var(--gold) 42%,#e47665 88%);-webkit-background-clip:text;color:transparent}.brand-panel p{position:relative;z-index:1;max-width:360px;color:var(--muted);font-size:13px;line-height:2;margin:20px 0 0}.system-list{position:relative;z-index:1;display:flex;gap:9px;flex-wrap:wrap;margin-top:30px}.system-list span{padding:7px 11px;border:1px solid var(--line);border-radius:20px;color:#cfc5b3;font-size:10px;background:rgba(0,0,0,.14)}.login-panel{padding:58px 52px;display:flex;flex-direction:column;justify-content:center;background:rgba(12,10,8,.74)}.panel-kicker{color:var(--muted);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:20px}.login-panel h2{margin:0;font-size:31px;line-height:1.3}.login-panel p{color:var(--muted);font-size:13px;line-height:1.9;margin:12px 0 30px}.discord-button{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:58px;border-radius:13px;text-decoration:none;color:#191207;font-weight:800;font-size:14px;background:linear-gradient(100deg,var(--gold),#ffe59a 45%,var(--gold));box-shadow:0 14px 34px rgba(244,194,76,.18);transition:.25s}.discord-button svg{width:22px;height:22px;fill:#191207}.discord-button:hover{transform:translateY(-3px);box-shadow:0 20px 42px rgba(244,194,76,.3);filter:saturate(1.1)}.secure-note{display:flex;gap:8px;align-items:center;color:#827a6d;font-size:10px;margin-top:20px}.secure-note i{width:7px;height:7px;border-radius:50%;background:#5fd083;box-shadow:0 0 10px #5fd083}.corner-mark{margin-top:58px;color:#5f584e;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:1.5px}
+body{margin:0;min-height:100vh;background:var(--ink);color:var(--text);font-family:'Cairo',sans-serif;display:grid;place-items:center;overflow:hidden}body:before{content:'';position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 12% 20%,rgba(244,194,76,.13),transparent 28%),radial-gradient(circle at 84% 76%,rgba(221,81,71,.09),transparent 24%),linear-gradient(135deg,#0b0a08,#160f0d 48%,#0b0a08)}body:after{content:'';position:fixed;inset:0;pointer-events:none;opacity:.24;background-image:linear-gradient(rgba(244,194,76,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(244,194,76,.08) 1px,transparent 1px);background-size:54px 54px;mask-image:linear-gradient(90deg,transparent,#000 22%,#000 78%,transparent)}.login-shell{position:relative;z-index:1;width:min(1040px,calc(100% - 48px));min-height:590px;display:grid;grid-template-columns:1.1fr .9fr;background:rgba(20,16,11,.78);border:1px solid var(--line);border-radius:28px;overflow:hidden;box-shadow:0 30px 100px rgba(0,0,0,.42)}.brand-panel{position:relative;padding:58px 52px;background:linear-gradient(145deg,rgba(244,194,76,.12),rgba(18,14,10,.82) 53%,rgba(221,81,71,.09));display:flex;flex-direction:column;justify-content:space-between;border-left:1px solid var(--line)}.brand-panel:after{content:'D';position:absolute;left:5%;bottom:-24%;font:900 360px 'IBM Plex Mono',monospace;color:rgba(244,194,76,.045);line-height:1}.micro{position:relative;z-index:1;color:var(--gold);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:2px}.brand-panel h1{position:relative;z-index:1;font-size:clamp(58px,8vw,105px);letter-spacing:10px;line-height:.9;margin:0;background:linear-gradient(115deg,#fff0b0 8%,var(--gold) 42%,#e47665 88%);-webkit-background-clip:text;color:transparent}.brand-panel p{position:relative;z-index:1;max-width:360px;color:var(--muted);font-size:13px;line-height:2;margin:20px 0 0}.system-list{position:relative;z-index:1;display:flex;gap:9px;flex-wrap:wrap;margin-top:30px}.system-list span{padding:7px 11px;border:1px solid var(--line);border-radius:20px;color:#cfc5b3;font-size:10px;background:rgba(0,0,0,.14)}.login-panel{padding:58px 52px;display:flex;flex-direction:column;justify-content:center;background:rgba(12,10,8,.74)}.panel-kicker{color:var(--muted);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:20px}.login-panel h2{margin:0;font-size:31px;line-height:1.3}.login-panel p{color:var(--muted);font-size:13px;line-height:1.9;margin:12px 0 30px}.discord-button{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:58px;border-radius:13px;text-decoration:none;color:#191207;font-weight:800;font-size:14px;background:linear-gradient(100deg,var(--gold),#ffe59a 45%,var(--gold));box-shadow:0 14px 34px rgba(244,194,76,.18);transition:.25s}.discord-button svg{width:22px;height:22px;fill:#191207}.discord-button:hover{transform:translateY(-3px);box-shadow:0 20px 42px rgba(244,194,76,.3);filter:saturate(1.1)}.secure-note{display:flex;gap:8px;align-items:center;color:#827a6d;font-size:10px;margin-top:20px}.secure-note i{width:7px;height:7px;border-radius:50%;background:#5fd083;box-shadow:0 0 10px #5fd083}.corner-mark{margin-top:58px;color:#5f584e;font:500 9px 'IBM Plex Mono',monospace;letter-spacing:1.5px}
 @media(max-width:760px){body{overflow:auto;display:block;padding:18px 0}.login-shell{width:calc(100% - 28px);min-height:0;display:flex;flex-direction:column}.brand-panel{padding:34px 25px 30px;min-height:300px}.brand-panel h1{font-size:58px;letter-spacing:6px}.brand-panel p{font-size:12px;margin-top:14px}.brand-panel:after{font-size:220px;bottom:-22%}.login-panel{padding:32px 25px 36px}.login-panel h2{font-size:26px}.corner-mark{margin-top:35px}}
 </style>
 </head>
-<body><main class="login-shell"><section class="brand-panel"><div><div class="micro">VORTEX / CONTROL CENTER</div><h1>VORTEX</h1><p>مركز تحكم واحد لإدارة سيرفراتك، حماية مجتمعك، ومتابعة كل الأنظمة من واجهة مرتبة وسريعة.</p><div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div></div><div class="corner-mark">SYSTEM ONLINE · BUILD 2.0</div></section><section class="login-panel"><div class="panel-kicker">AUTHENTICATION REQUIRED</div><h2>أهلًا بك في مركز التحكم</h2><p>سجّل الدخول بحساب Discord المصرّح له للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p><a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a><div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div></section></main></body></html>`);
+<body><main class="login-shell"><section class="brand-panel"><div><div class="micro">Drayz System / CONTROL CENTER</div><h1>Drayz System</h1><p>مركز تحكم واحد لإدارة سيرفراتك، حماية مجتمعك، ومتابعة كل الأنظمة من واجهة مرتبة وسريعة.</p><div class="system-list"><span>SECURE ACCESS</span><span>DISCORD POWERED</span><span>LIVE CONTROL</span></div></div><div class="corner-mark">SYSTEM ONLINE · BUILD 2.0</div></section><section class="login-panel"><div class="panel-kicker">AUTHENTICATION REQUIRED</div><h2>أهلًا بك في مركز التحكم</h2><p>سجّل الدخول بحساب Discord للوصول إلى إعدادات السيرفر ولوحة الإدارة.</p><a href="/auth/discord" class="discord-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.54 5.04A16.9 16.9 0 0 0 15.4 3.75l-.52 1.06a15.2 15.2 0 0 0-5.76 0L8.6 3.75a16.9 16.9 0 0 0-4.14 1.29C1.84 8.94 1.13 12.86 1.49 16.73a16.8 16.8 0 0 0 5.06 2.57l1.23-1.67c-.68-.26-1.33-.58-1.94-.96l.47-.36c3.74 1.75 7.8 1.75 11.49 0l.48.36c-.62.38-1.27.7-1.95.96l1.23 1.67a16.8 16.8 0 0 0 5.06-2.57c.42-4.49-.72-8.37-3.08-11.69ZM8.24 15.23c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Zm7.52 0c-1.12 0-2.04-1.03-2.04-2.3s.9-2.3 2.04-2.3c1.14 0 2.05 1.03 2.04 2.3 0 1.27-.9 2.3-2.04 2.3Z"/></svg>تسجيل الدخول عبر Discord</a><div class="secure-note"><i></i> يتم تحويلك إلى Discord الرسمي للمصادقة الآمنة</div></section></main></body></html>`);
 });
 
 app.get('/ping', (req, res) => res.send('I am alive!'));
 app.get('/', (req, res) => res.redirect('/dashboard'));
-
-// ==========================================
-// Public Ticket Transcript
-// ==========================================
-app.get('/ticket-transcript/:token', async (req, res) => {
-    try {
-        const ticket = await TicketData.findOne({ transcriptToken: req.params.token }).lean();
-        if (!ticket) return res.status(404).send('<h1 style="font-family:Arial;text-align:center;margin-top:80px">Transcript غير موجود أو انتهت صلاحيته.</h1>');
-        const messages = Array.isArray(ticket.transcriptMessages) ? ticket.transcriptMessages : [];
-        const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[ch]));
-        const fmt = value => new Date(value).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
-        const messageHtml = messages.map(message => {
-            const avatar = esc(message.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png');
-            const author = esc(message.authorDisplayName || message.authorName || 'عضو');
-            const content = esc(message.content || '').replace(/\n/g, '<br>');
-            const attachments = (message.attachments || []).map(file => `<a class="attachment" href="${esc(file.url)}" target="_blank" rel="noopener">📎 ${esc(file.name || 'مرفق')}</a>`).join('');
-            const embeds = (message.embeds || []).map(embed => `<div class="quoted"><strong>${esc(embed.title || 'Embed')}</strong>${embed.description ? `<div>${esc(embed.description).replace(/\n/g, '<br>')}</div>` : ''}${embed.url ? `<a href="${esc(embed.url)}" target="_blank" rel="noopener">فتح الرابط</a>` : ''}</div>`).join('');
-            return `<article class="message"><img class="avatar" src="${avatar}" alt=""><div class="message-body"><div class="meta"><strong>${author}</strong><span>${fmt(message.createdAt)}</span></div>${content ? `<div class="content">${content}</div>` : ''}${attachments}${embeds}</div></article>`;
-        }).join('');
-        const title = esc(ticket.ticketType || 'تذكرة دعم');
-        res.send(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>محتوى التكت · ${title}</title><style>
-:root{--bg:#313338;--panel:#2b2d31;--panel2:#1e1f22;--text:#dbdee1;--muted:#949ba4;--gold:#f4c24c;--line:#3f4147}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,"Cairo",sans-serif}.shell{max-width:1100px;margin:28px auto;background:var(--panel2);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 20px 70px #0008}.top{padding:24px 30px;background:linear-gradient(135deg,#202225,#2b2d31);border-bottom:1px solid var(--line)}.brand{color:var(--gold);font-weight:800;font-size:12px;letter-spacing:2px}.top h1{margin:10px 0 4px;font-size:25px}.top p{margin:0;color:var(--muted);font-size:13px}.info{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:18px 30px;background:#232428;border-bottom:1px solid var(--line)}.info div{background:#2b2d31;border-radius:9px;padding:12px}.info b{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}.info span{font-size:13px}.chat{padding:24px 30px}.message{display:flex;gap:13px;padding:11px 0;direction:rtl}.message:hover{background:#2b2d31;border-radius:8px}.avatar{width:40px;height:40px;border-radius:50%;object-fit:cover;flex:none}.message-body{min-width:0;flex:1}.meta{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}.meta strong{font-size:14px;color:#fff}.meta span{font-size:11px;color:var(--muted);direction:ltr}.content{font-size:14px;line-height:1.7;white-space:normal;overflow-wrap:anywhere}.attachment{display:inline-block;margin:8px 6px 0 0;background:#1e1f22;color:#00a8fc;padding:8px 10px;border-radius:6px;text-decoration:none;font-size:12px}.quoted{margin-top:8px;border-right:4px solid var(--gold);background:#1e1f22;padding:10px 12px;border-radius:5px;max-width:680px;color:#c9ccd1;line-height:1.6}.quoted strong{display:block;color:#fff;margin-bottom:3px}.quoted a{color:#00a8fc;font-size:12px}.empty{text-align:center;color:var(--muted);padding:70px}.footer{padding:14px 30px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;text-align:center}@media(max-width:700px){.shell{margin:0;border-radius:0;border-left:0;border-right:0}.info{grid-template-columns:1fr 1fr;padding:14px}.top,.chat,.footer{padding-left:16px;padding-right:16px}.message{gap:9px}.avatar{width:34px;height:34px}}
-</style></head><body><main class="shell"><header class="top"><div class="brand">VORTEX / TICKET TRANSCRIPT</div><h1>محتوى ${title}</h1><p>نسخة محفوظة من محادثة التكت بعد إغلاقها.</p></header><section class="info"><div><b>صاحب التكت</b><span>${esc(ticket.ownerName || ticket.ownerId)}</span></div><div><b>تم فتحه</b><span>${fmt(ticket.openedAt)}</span></div><div><b>تم إغلاقه</b><span>${fmt(ticket.closedAt)}</span></div><div><b>تم استلامه بواسطة</b><span>${esc(ticket.claimedByName || ticket.claimedBy || 'لم يتم الاستلام')}</span></div><div><b>وقت الاستلام</b><span>${ticket.claimedAt ? fmt(ticket.claimedAt) : 'لم يتم الاستلام'}</span></div><div><b>أغلقه</b><span>${esc(ticket.closedByName || ticket.closedBy || '—')}</span></div></section><section class="chat">${messageHtml || '<div class="empty">لا توجد رسائل محفوظة في هذا التكت.</div>'}</section><footer class="footer">تم إنشاء هذه الصفحة تلقائيًا بواسطة نظام التكت.</footer></main></body></html>`);
-    } catch (error) {
-        console.error('[Transcript Page Error]', error);
-        res.status(500).send('تعذر تحميل محتوى التكت.');
-    }
-});
 
 // ==========================================
 // 8. UI Helper Function
@@ -819,10 +624,8 @@ function ui(guild, active, content) {
     const safe = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[ch]));
     const nav = guildId ? [
         ['home', 'نظرة عامة', `/manage/${guildId}/home`, '<path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/>'],
-        ['serverinvite', 'رابط السيرفر', `/manage/${guildId}/serverinvite`, '<path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.2-1.2"/><path d="m8 16 8-8"/>'],
         ['security', 'الحماية', `/manage/${guildId}/security`, '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6z"/><path d="m9 12 2 2 4-4"/>'],
         ['kick', 'تنبيهات Kick', `/manage/${guildId}/kick`, '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'],
-        ['admincmds', 'الأوامر الإدارية', `/manage/${guildId}/admincmds`, '<path d="m4 7 4-4 4 4-4 4zM12 17l4-4 4 4-4 4zM14 7h6M4 17h6"/>'],
         ['suggestions', 'الاقتراحات', `/manage/${guildId}/suggestions`, '<path d="M20 11a7 7 0 0 1-7 7H8l-4 3v-6a7 7 0 1 1 16-4z"/>'],
         ['logs', 'السجلات', `/manage/${guildId}/logs`, '<path d="M6 3h9l3 3v15H6z"/><path d="M9 11h6M9 15h6M9 7h3"/>'],
         ['tickets', 'التذاكر', `/manage/${guildId}/tickets`, '<path d="M4 7h16v10H4z"/><path d="M8 7v10M16 7v10"/>'],
@@ -830,33 +633,28 @@ function ui(guild, active, content) {
         ['levels', 'نظام المستويات', `/manage/${guildId}/levels`, '<path d="M5 19V9M12 19V5M19 19v-8"/>'],
         ['welcome', 'الترحيب', `/manage/${guildId}/welcome`, '<path d="M12 21s-8-4.5-8-10V5l8-3 8 3v6c0 5.5-8 10-8 10z"/><path d="m9 12 2 2 4-4"/>'],
         ['giveaway', 'الهدايا', `/manage/${guildId}/giveaway`, '<path d="M4 10h16v10H4zM3 7h18v3H3zM12 7v13M12 7H8a2 2 0 1 1 2-2c2 0 2 2 2 2z"/>'],
-        ['roles', 'الرتب', `/manage/${guildId}/roles`, '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 0 1 5 2M17 20h4"/>'],
         ['notificationroles', 'رتب الإشعارات', `/manage/${guildId}/notificationroles`, '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/><circle cx="18" cy="5" r="3"/>'],
-        ['mod', 'الإشراف', `/manage/${guildId}/mod`, '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'],
-        ['massban', 'تبنيد الأشخاص', `/manage/${guildId}/massban`, '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6z"/><path d="M8 12h8"/>'],
-        ['channelswipe', 'حذف جميع الرومات', `/manage/${guildId}/channelswipe`, '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>'],
-        ['poetry', 'الشعر العراقي', `/manage/${guildId}/poetry`, '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'],
-        ['cleanup', 'تفريغ السيرفر', `/manage/${guildId}/cleanup`, '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>']
+        
     ] : [];
     const navHtml = nav.map(([key, label, href, path]) => `<a class="rail-link ${active === key ? 'is-active' : ''}" href="${href}" aria-current="${active === key ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${path}</svg><span>${label}</span><i></i></a>`).join('');
     return `<!doctype html>
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${safe(guildName)} · VORTEX</title>
+<title>${safe(guildName)} · Drayz System</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#0c0b09;--panel:#15120e;--panel-2:#1b1711;--panel-3:#231d15;--line:rgba(244,194,76,.15);--line-strong:rgba(244,194,76,.34);--gold:#f4c24c;--gold-2:#b57b19;--red:#e14d43;--red-soft:rgba(225,77,67,.14);--muted:#918a7c;--text:#f5f0e6;--shadow:0 22px 70px rgba(0,0,0,.28);--rail:272px}
-*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--gold-2) #0f0d0a}*::-webkit-scrollbar{width:9px;height:9px}*::-webkit-scrollbar-track{background:#0f0d0a;border-radius:12px}*::-webkit-scrollbar-thumb{background:linear-gradient(180deg,var(--gold),var(--gold-2));border:2px solid #0f0d0a;border-radius:12px}*::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg,#ffe08a,var(--gold))}*::-webkit-scrollbar-button{display:none;width:0;height:0}html{background:var(--ink);overflow-x:hidden}body{margin:0;background:radial-gradient(circle at 15% 8%,rgba(244,194,76,.06),transparent 28%),radial-gradient(circle at 90% 80%,rgba(225,77,67,.05),transparent 24%),var(--ink);color:var(--text);font-family:'Cairo',sans-serif;min-height:100vh}body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.22;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#000,transparent 88%)}a{color:inherit}.app{min-height:100vh}.rail{position:fixed;z-index:20;inset:0 0 0 auto;width:var(--rail);padding:24px 16px 18px;background:linear-gradient(180deg,rgba(24,19,13,.98),rgba(12,11,9,.98));border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-16px 0 50px rgba(0,0,0,.16)}.brand{display:flex;align-items:center;gap:11px;padding:4px 9px 23px;border-bottom:1px solid var(--line)}.brand-mark{width:40px;height:40px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,var(--gold),var(--gold-2));color:#161007;font-size:18px;font-weight:900;box-shadow:0 10px 25px rgba(244,194,76,.18)}.brand strong{display:block;font-size:19px;letter-spacing:2px;line-height:1}.brand small{display:block;color:var(--muted);font-size:9px;letter-spacing:2px;margin-top:5px;font-family:'IBM Plex Mono',monospace}.rail-section{color:#756d61;font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1px;margin:25px 10px 9px;text-transform:uppercase}.rail-nav{display:flex;flex-direction:column;gap:4px;overflow:auto;padding:2px 3px 10px 2px;scrollbar-width:thin;scrollbar-color:var(--gold-2) transparent}.rail-nav::-webkit-scrollbar{width:6px}.rail-nav::-webkit-scrollbar-track{background:transparent}.rail-nav::-webkit-scrollbar-thumb{border:0;background:linear-gradient(180deg,var(--gold),var(--gold-2))}.rail-nav::-webkit-scrollbar-button{display:none}.rail-link{min-height:43px;display:flex;align-items:center;gap:12px;padding:9px 11px;border:1px solid transparent;border-radius:12px;text-decoration:none;color:#a59c8d;font-size:12px;font-weight:600;transition:.2s ease}.rail-link svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}.rail-link i{width:5px;height:5px;border-radius:50%;margin-right:auto;background:transparent}.rail-link:hover{background:rgba(244,194,76,.07);color:var(--text);transform:translateX(-3px)}.rail-link.is-active{background:linear-gradient(90deg,rgba(244,194,76,.16),rgba(244,194,76,.045));border-color:var(--line);color:var(--gold);box-shadow:inset -3px 0 var(--gold)}.rail-link.is-active i{background:var(--gold);box-shadow:0 0 12px var(--gold)}.rail-footer{margin-top:auto;padding:15px 10px 0;border-top:1px solid var(--line);color:var(--muted);font-size:10px}.rail-footer a{color:var(--red);text-decoration:none;float:left}.workspace{margin-right:var(--rail);min-width:0}.topbar{height:78px;padding:0 42px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);background:rgba(12,11,9,.72);backdrop-filter:blur(18px);position:sticky;top:0;z-index:10}.menu-btn{display:none;border:1px solid var(--line);background:var(--panel);color:var(--gold);border-radius:11px;width:42px;height:42px;font-size:20px}.crumb{color:var(--muted);font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.5px}.crumb b{display:block;color:var(--text);font:700 18px 'Cairo',sans-serif;margin-top:2px}.top-status{margin-right:auto;display:flex;align-items:center;gap:8px;color:#b4ad9f;font-size:11px}.status-dot{width:7px;height:7px;border-radius:50%;background:#48c774;box-shadow:0 0 12px #48c774}.top-actions{display:flex;gap:8px}.top-actions a{display:grid;place-items:center;width:38px;height:38px;border:1px solid var(--line);border-radius:10px;color:var(--muted);text-decoration:none;background:rgba(255,255,255,.015)}.top-actions a:hover{color:var(--gold);border-color:var(--line-strong)}.content{padding:38px 42px 60px;max-width:1500px;margin:auto}.welcome-strip{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:30px;padding:31px 34px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(110deg,rgba(244,194,76,.11),rgba(23,18,12,.88) 45%),var(--panel);box-shadow:var(--shadow);position:relative;overflow:hidden}.welcome-strip:after{content:'V';position:absolute;left:27px;top:-42px;color:rgba(244,194,76,.055);font:900 180px 'IBM Plex Mono',monospace}.eyebrow{color:var(--gold);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;text-transform:uppercase}.welcome-strip h1{margin:8px 0 3px;font-size:29px;letter-spacing:-.5px}.welcome-strip p{margin:0;color:var(--muted);font-size:12px}.welcome-meta{position:relative;z-index:1;text-align:left;color:var(--muted);font:500 10px 'IBM Plex Mono',monospace}.view{min-width:0}.card{background:linear-gradient(145deg,rgba(35,29,21,.88),rgba(18,15,11,.92));border:1px solid var(--line);border-radius:18px;padding:25px;margin-bottom:20px;box-shadow:0 12px 40px rgba(0,0,0,.14)}.card:hover{border-color:var(--line-strong)}.card h3{display:flex;align-items:center;gap:10px;margin:0 0 20px;font-size:16px;color:var(--text)}.card h3 svg{width:19px;color:var(--gold)}label{display:block;color:#b6ad9d;font-size:12px;margin:15px 0 7px}input,select,textarea{width:100%;padding:12px 14px;color:var(--text);background:#0f0d0a;border:1px solid rgba(255,255,255,.09);border-radius:10px;outline:0;font:500 13px 'Cairo',sans-serif;transition:.2s}input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(244,194,76,.1)}textarea{min-height:105px;resize:vertical}.btn-save{border:0;border-radius:10px;padding:12px 21px;background:linear-gradient(135deg,var(--gold),var(--gold-2));color:#171006;font:800 12px 'Cairo',sans-serif;cursor:pointer;box-shadow:0 8px 20px rgba(244,194,76,.12);transition:.2s}.btn-save:hover{transform:translateY(-2px);filter:brightness(1.08)}.btn-danger{background:var(--red)!important;color:#fff!important}.tag{display:inline-flex;align-items:center;border-radius:20px;padding:4px 9px;font-size:10px}.tag-blue{background:rgba(244,194,76,.12);color:var(--gold);border:1px solid var(--line)}.tag-red{background:var(--red-soft);color:#f0837b;border:1px solid rgba(225,77,67,.2)}.data-table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid var(--line);border-radius:13px;font-size:12px}.data-table th{background:rgba(244,194,76,.07);color:var(--gold);font-size:10px;text-align:right;padding:13px}.data-table td{padding:13px;border-top:1px solid rgba(255,255,255,.055);color:#c8c0b2}.data-table-wrap{overflow:auto}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-box{padding:20px;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.018)}.stat-num{color:var(--gold);font:800 28px 'IBM Plex Mono',monospace}.stat-label{color:var(--muted);font-size:11px;margin-top:5px}.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.guild-card{padding:21px;border:1px solid var(--line);border-radius:17px;background:var(--panel);transition:.2s}.guild-card:hover{transform:translateY(-4px);border-color:var(--gold)}.guild-icon{width:48px;height:48px;border-radius:14px;object-fit:cover;margin-bottom:14px}.guild-card h3{margin:0 0 12px;font-size:15px}.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.06)}.toggle-row input[type=checkbox]{width:19px;height:19px;accent-color:var(--gold)}.drawer-backdrop{display:none}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--gold-2) #0f0d0a}*::-webkit-scrollbar{width:9px;height:9px}*::-webkit-scrollbar-track{background:#0f0d0a;border-radius:12px}*::-webkit-scrollbar-thumb{background:linear-gradient(180deg,var(--gold),var(--gold-2));border:2px solid #0f0d0a;border-radius:12px}*::-webkit-scrollbar-thumb:hover{background:linear-gradient(180deg,#ffe08a,var(--gold))}*::-webkit-scrollbar-button{display:none;width:0;height:0}html{background:var(--ink);overflow-x:hidden}body{margin:0;background:radial-gradient(circle at 15% 8%,rgba(244,194,76,.06),transparent 28%),radial-gradient(circle at 90% 80%,rgba(225,77,67,.05),transparent 24%),var(--ink);color:var(--text);font-family:'Cairo',sans-serif;min-height:100vh}body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.22;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#000,transparent 88%)}a{color:inherit}.app{min-height:100vh}.rail{position:fixed;z-index:20;inset:0 0 0 auto;width:var(--rail);padding:24px 16px 18px;background:linear-gradient(180deg,rgba(24,19,13,.98),rgba(12,11,9,.98));border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-16px 0 50px rgba(0,0,0,.16)}.brand{display:flex;align-items:center;gap:11px;padding:4px 9px 23px;border-bottom:1px solid var(--line)}.brand-mark{width:40px;height:40px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,var(--gold),var(--gold-2));color:#161007;font-size:18px;font-weight:900;box-shadow:0 10px 25px rgba(244,194,76,.18)}.brand strong{display:block;font-size:19px;letter-spacing:2px;line-height:1}.brand small{display:block;color:var(--muted);font-size:9px;letter-spacing:2px;margin-top:5px;font-family:'IBM Plex Mono',monospace}.rail-section{color:#756d61;font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1px;margin:25px 10px 9px;text-transform:uppercase}.rail-nav{display:flex;flex-direction:column;gap:4px;overflow:auto;padding:2px 3px 10px 2px;scrollbar-width:thin;scrollbar-color:var(--gold-2) transparent}.rail-nav::-webkit-scrollbar{width:6px}.rail-nav::-webkit-scrollbar-track{background:transparent}.rail-nav::-webkit-scrollbar-thumb{border:0;background:linear-gradient(180deg,var(--gold),var(--gold-2))}.rail-nav::-webkit-scrollbar-button{display:none}.rail-link{min-height:43px;display:flex;align-items:center;gap:12px;padding:9px 11px;border:1px solid transparent;border-radius:12px;text-decoration:none;color:#a59c8d;font-size:12px;font-weight:600;transition:.2s ease}.rail-link svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}.rail-link i{width:5px;height:5px;border-radius:50%;margin-right:auto;background:transparent}.rail-link:hover{background:rgba(244,194,76,.07);color:var(--text);transform:translateX(-3px)}.rail-link.is-active{background:linear-gradient(90deg,rgba(244,194,76,.16),rgba(244,194,76,.045));border-color:var(--line);color:var(--gold);box-shadow:inset -3px 0 var(--gold)}.rail-link.is-active i{background:var(--gold);box-shadow:0 0 12px var(--gold)}.rail-footer{margin-top:auto;padding:15px 10px 0;border-top:1px solid var(--line);color:var(--muted);font-size:10px}.rail-footer a{color:var(--red);text-decoration:none;float:left}.workspace{margin-right:var(--rail);min-width:0}.topbar{height:78px;padding:0 42px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);background:rgba(12,11,9,.72);backdrop-filter:blur(18px);position:sticky;top:0;z-index:10}.menu-btn{display:none;border:1px solid var(--line);background:var(--panel);color:var(--gold);border-radius:11px;width:42px;height:42px;font-size:20px}.crumb{color:var(--muted);font:500 11px 'IBM Plex Mono',monospace;letter-spacing:.5px}.crumb b{display:block;color:var(--text);font:700 18px 'Cairo',sans-serif;margin-top:2px}.top-status{margin-right:auto;display:flex;align-items:center;gap:8px;color:#b4ad9f;font-size:11px}.status-dot{width:7px;height:7px;border-radius:50%;background:#48c774;box-shadow:0 0 12px #48c774}.top-actions{display:flex;gap:8px}.top-actions a{display:grid;place-items:center;width:38px;height:38px;border:1px solid var(--line);border-radius:10px;color:var(--muted);text-decoration:none;background:rgba(255,255,255,.015)}.top-actions a:hover{color:var(--gold);border-color:var(--line-strong)}.content{padding:38px 42px 60px;max-width:1500px;margin:auto}.welcome-strip{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:30px;padding:31px 34px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(110deg,rgba(244,194,76,.11),rgba(23,18,12,.88) 45%),var(--panel);box-shadow:var(--shadow);position:relative;overflow:hidden}.welcome-strip:after{content:'D';position:absolute;left:27px;top:-42px;color:rgba(244,194,76,.055);font:900 180px 'IBM Plex Mono',monospace}.eyebrow{color:var(--gold);font:600 10px 'IBM Plex Mono',monospace;letter-spacing:1.5px;text-transform:uppercase}.welcome-strip h1{margin:8px 0 3px;font-size:29px;letter-spacing:-.5px}.welcome-strip p{margin:0;color:var(--muted);font-size:12px}.welcome-meta{position:relative;z-index:1;text-align:left;color:var(--muted);font:500 10px 'IBM Plex Mono',monospace}.view{min-width:0}.card{background:linear-gradient(145deg,rgba(35,29,21,.88),rgba(18,15,11,.92));border:1px solid var(--line);border-radius:18px;padding:25px;margin-bottom:20px;box-shadow:0 12px 40px rgba(0,0,0,.14)}.card:hover{border-color:var(--line-strong)}.card h3{display:flex;align-items:center;gap:10px;margin:0 0 20px;font-size:16px;color:var(--text)}.card h3 svg{width:19px;color:var(--gold)}label{display:block;color:#b6ad9d;font-size:12px;margin:15px 0 7px}input,select,textarea{width:100%;padding:12px 14px;color:var(--text);background:#0f0d0a;border:1px solid rgba(255,255,255,.09);border-radius:10px;outline:0;font:500 13px 'Cairo',sans-serif;transition:.2s}input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(244,194,76,.1)}textarea{min-height:105px;resize:vertical}.btn-save{border:0;border-radius:10px;padding:12px 21px;background:linear-gradient(135deg,var(--gold),var(--gold-2));color:#171006;font:800 12px 'Cairo',sans-serif;cursor:pointer;box-shadow:0 8px 20px rgba(244,194,76,.12);transition:.2s}.btn-save:hover{transform:translateY(-2px);filter:brightness(1.08)}.btn-danger{background:var(--red)!important;color:#fff!important}.tag{display:inline-flex;align-items:center;border-radius:20px;padding:4px 9px;font-size:10px}.tag-blue{background:rgba(244,194,76,.12);color:var(--gold);border:1px solid var(--line)}.tag-red{background:var(--red-soft);color:#f0837b;border:1px solid rgba(225,77,67,.2)}.data-table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid var(--line);border-radius:13px;font-size:12px}.data-table th{background:rgba(244,194,76,.07);color:var(--gold);font-size:10px;text-align:right;padding:13px}.data-table td{padding:13px;border-top:1px solid rgba(255,255,255,.055);color:#c8c0b2}.data-table-wrap{overflow:auto}.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.stat-box{padding:20px;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.018)}.stat-num{color:var(--gold);font:800 28px 'IBM Plex Mono',monospace}.stat-label{color:var(--muted);font-size:11px;margin-top:5px}.guild-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.guild-card{padding:21px;border:1px solid var(--line);border-radius:17px;background:var(--panel);transition:.2s}.guild-card:hover{transform:translateY(-4px);border-color:var(--gold)}.guild-icon{width:48px;height:48px;border-radius:14px;object-fit:cover;margin-bottom:14px}.guild-card h3{margin:0 0 12px;font-size:15px}.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.06)}.toggle-row input[type=checkbox]{width:19px;height:19px;accent-color:var(--gold)}.drawer-backdrop{display:none}
 @media(max-width:950px){:root{--rail:245px}.content{padding:28px 24px}.topbar{padding:0 24px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.rail{transform:translateX(110%);transition:transform .25s ease;width:min(300px,88vw);box-shadow:-25px 0 80px rgba(0,0,0,.5)}.rail.is-open{transform:translateX(0)}.workspace{margin-right:0}.menu-btn{display:block}.topbar{height:67px;padding:0 15px}.top-status,.top-actions a:first-child{display:none}.crumb b{font-size:15px}.content{padding:18px 13px 35px}.welcome-strip{display:block;padding:22px 20px}.welcome-strip h1{font-size:23px}.welcome-meta{text-align:right;margin-top:16px}.stats-grid{grid-template-columns:1fr 1fr;gap:9px}.stat-box{padding:15px}.stat-num{font-size:21px}.card{padding:18px 14px;border-radius:14px}.drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.58);z-index:15}.drawer-backdrop.is-open{display:block}}
 </style>
 </head>
 <body>
 <div class="app">
-<aside class="rail" id="rail"><div class="brand"><div class="brand-mark">V</div><div><strong>VORTEX</strong><small>CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
+<aside class="rail" id="rail"><div class="brand"><div class="brand-mark">D</div><div><strong>Drayz System</strong><small>CONTROL CENTER</small></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<a href="/logout">خروج</a></div></aside>
 <div class="drawer-backdrop" id="backdrop"></div>
-<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>VORTEX / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات">⌂</a><a href="/logout" title="تسجيل الخروج">↪</a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
+<section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>Drayz System / DASHBOARD</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> النظام متصل</div><div class="top-actions"><a href="/dashboard" title="السيرفرات">⌂</a><a href="/logout" title="تسجيل الخروج">↪</a></div></header><main class="content"><section class="welcome-strip"><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
 </div>
 <script>
 (() => { const rail=document.getElementById('rail'), backdrop=document.getElementById('backdrop'), btn=document.getElementById('menuBtn'); if(!rail||!backdrop||!btn)return; const close=()=>{rail.classList.remove('is-open');backdrop.classList.remove('is-open')}; btn.addEventListener('click',()=>{rail.classList.toggle('is-open');backdrop.classList.toggle('is-open')}); backdrop.addEventListener('click',close); window.addEventListener('keydown',e=>{if(e.key==='Escape')close()}); })();
@@ -865,81 +663,6 @@ function ui(guild, active, content) {
 }
 
 // --- [ Dashboard - Admin Commands ] ---
-app.get('/manage/:guildId/admincmds', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    let config = await AdminCmdConfig.findOne({ guildId: g.id }) || new AdminCmdConfig({ guildId: g.id });
-
-    const classes = [
-        { title: 'إدارة الشات', keys: ['lock', 'unlock'] },
-        { title: 'نظام الكتم', keys: ['timeout', 'untimeout'] },
-        { title: 'نظام الحظر', keys: ['ban', 'unban'] },
-        { title: 'نظام الطرد', keys: ['kick'] }
-    ];
-
-    let classesHtml = '';
-    classes.forEach(cls => {
-        classesHtml += `<div class="card" style="border-right: 4px solid var(--gold);"><h4 style="color:var(--gold); margin-bottom:15px;">${cls.title}</h4><div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">`;
-        cls.keys.forEach(k => {
-            const s = config.settings[k];
-            const label = k === 'lock' ? 'قفل الشات' : k === 'unlock' ? 'فتح الشات' : k === 'timeout' ? 'كتم' : k === 'untimeout' ? 'فك الكتم' : k === 'ban' ? 'باند' : k === 'unban' ? 'فك باند' : 'كيك';
-            classesHtml += `
-                <div style="background:rgba(255,255,255,0.03); padding:15px; border-radius:12px; border:1px solid rgba(255,255,255,0.05);">
-                    <div style="font-weight:800; font-size:14px; margin-bottom:10px;">${label}</div>
-                    <label style="font-size:11px; color:#888;">الاختصار</label>
-                    <input type="text" name="${k}_shortcut" value="${s.shortcut}" style="margin-top:5px; margin-bottom:10px;">
-                    <div style="display:flex; flex-direction:column; gap:8px;">
-                        <label style="display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer;">
-                            <input type="checkbox" name="${k}_delUser" ${s.delUser ? 'checked' : ''} style="width:16px; height:16px; margin:0;"> حذف رسالة العضو
-                        </label>
-                        <label style="display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer;">
-                            <input type="checkbox" name="${k}_delBot" ${s.delBot ? 'checked' : ''} style="width:16px; height:16px; margin:0;"> حذف رد البوت
-                        </label>
-                    </div>
-                </div>
-            `;
-        });
-        classesHtml += `</div></div>`;
-    });
-
-    const content = `
-        <div class="card">
-            <h2 style="margin-bottom:10px;">الأوامر الإدارية المتقدمة</h2>
-            <p style="color:#666; font-size:13px; margin-bottom:30px;">تحكم في اختصارات الأوامر وطريقة تفاعل البوت معها في السيرفر.</p>
-            <form method="POST" action="/save/${g.id}/admincmds">
-                <div class="card" style="background:rgba(212,175,55,0.05); border:1px dashed var(--gold);">
-                    <label style="font-weight:800;">الرتب المسموح لها (IDs مفصولة بفاصلة)</label>
-                    <input type="text" name="adminRoles" value="${config.adminRoles.join(',')}" placeholder="مثلاً: 123456789,987654321">
-                </div>
-                ${classesHtml}
-                <button type="submit" class="btn-save" style="font-size:16px; padding:15px;">حفظ كافة التغييرات</button>
-            </form>
-        </div>
-    `;
-    res.send(ui(g, 'admincmds', content));
-});
-
-app.post('/save/:guildId/admincmds', checkAuth, async (req, res) => {
-    const guildId = req.params.guildId;
-    const b = req.body;
-    const roles = b.adminRoles.split(',').map(r => r.trim()).filter(Boolean);
-    const update = {
-        adminRoles: roles,
-        settings: {
-            lock: { shortcut: b.lock_shortcut, delUser: !!b.lock_delUser, delBot: !!b.lock_delBot },
-            unlock: { shortcut: b.unlock_shortcut, delUser: !!b.unlock_delUser, delBot: !!b.unlock_delBot },
-            timeout: { shortcut: b.timeout_shortcut, delUser: !!b.timeout_delUser, delBot: !!b.timeout_delBot },
-            untimeout: { shortcut: b.untimeout_shortcut, delUser: !!b.untimeout_delUser, delBot: !!b.untimeout_delBot },
-            ban: { shortcut: b.ban_shortcut, delUser: !!b.ban_delUser, delBot: !!b.ban_delBot },
-            unban: { shortcut: b.unban_shortcut, delUser: !!b.unban_delUser, delBot: !!b.unban_delBot },
-            kick: { shortcut: b.kick_shortcut, delUser: !!b.kick_delUser, delBot: !!b.kick_delBot }
-        }
-    };
-    await AdminCmdConfig.findOneAndUpdate({ guildId }, { $set: update }, { upsert: true });
-    res.redirect(`/manage/${guildId}/admincmds`);
-});
-
-// ==========================================
 
 // --- [ Dashboard - Server List ] ---
 app.get('/dashboard', checkAuth, (req, res) => {
@@ -954,7 +677,7 @@ app.get('/dashboard', checkAuth, (req, res) => {
         <div style="font-size:48px; font-weight:800; letter-spacing:6px;
             background: linear-gradient(135deg, var(--gold), #fff, var(--red));
             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-            margin-bottom:10px;">VORTEX </div>
+            margin-bottom:10px;">Drayz System </div>
         <p style="color:var(--text-muted); font-size:15px;">اختر السيرفر لإدارته</p>
         <div style="margin-top:20px; max-width:400px; margin-left:auto; margin-right:auto;">
             <input type="text" id="guildSearch" placeholder="ابحث عن سيرفر..." onkeyup="filterGuilds()" style="text-align:center; border-radius:20px; background:rgba(212,175,55,0.05); border:1px solid var(--gold-border);">
@@ -1030,35 +753,6 @@ async function markInviteMemberPresent(guildId, userId, present) {
     ).catch(() => {});
 }
 
-async function createGuildInvite(guild) {
-    const botMember = guild.members.me || await guild.members.fetch(client.user.id).catch(() => null);
-    if (!botMember) return null;
-    const channels = [...guild.channels.cache.values()]
-        .filter(channel => channel.type !== ChannelType.GuildCategory && channel.isTextBased?.());
-    for (const channel of channels) {
-        const permissions = channel.permissionsFor(botMember);
-        if (!permissions?.has(PermissionFlagsBits.CreateInstantInvite)) continue;
-        const invite = await channel.createInvite({
-            maxAge: 0,
-            maxUses: 0,
-            unique: false,
-            reason: 'إنشاء رابط دخول من لوحة تحكم VORTEX'
-        }).catch(() => null);
-        if (invite) return { url: invite.url, channelName: channel.name };
-    }
-    return null;
-}
-
-app.get('/manage/:guildId/serverinvite', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    const invite = await createGuildInvite(g);
-    const safeUrl = invite?.url ? invite.url.replace(/&/g, '&amp;').replace(/"/g, '&quot;') : '';
-    const content = invite
-        ? `<div class="card"><h3>رابط دخول السيرفر</h3><p style="color:var(--text-muted);font-size:13px;line-height:1.9;">هذا رابط دعوة دائم للسيرفر، تم إنشاؤه من القناة <b style="color:var(--gold);">#${invite.channelName}</b>.</p><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><input id="serverInvite" value="${safeUrl}" readonly style="direction:ltr;text-align:left;flex:1;min-width:240px;"><button type="button" id="copyInvite" class="btn-save">نسخ الرابط</button><a href="${safeUrl}" target="_blank" rel="noopener" class="btn-save" style="text-decoration:none;">فتح الرابط</a></div></div><script>document.getElementById('copyInvite').addEventListener('click',async function(){const input=document.getElementById('serverInvite');try{await navigator.clipboard.writeText(input.value)}catch{input.select();document.execCommand('copy')}this.textContent='تم النسخ';setTimeout(()=>this.textContent='نسخ الرابط',1800)});</script>`
-        : `<div class="card"><h3>رابط دخول السيرفر</h3><p style="color:var(--red);font-size:13px;line-height:1.9;">تعذر إنشاء رابط دعوة. تأكد أن البوت يملك صلاحية <b>Create Instant Invite</b> في روم واحد على الأقل، ثم حدّث الصفحة.</p></div>`;
-    res.send(ui(g, 'serverinvite', content));
-});
 
 app.get('/manage/:guildId/home', checkAuth, async (req, res) => {
     const g = client.guilds.cache.get(req.params.guildId);
@@ -1713,18 +1407,11 @@ app.get('/manage/:guildId/tickets', checkAuth, async (req, res) => {
                 </div>
             </div>
 
-            <label style="margin-top:16px;">قناة إرسال بانل التذاكر (اختياري)</label>
+            <label style="margin-top:16px;">قناة الإرسال (اختياري)</label>
             <select name="targetChannel">
                 <option value="">-- لا ترسل الآن --</option>
                 ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}"># ${c.name}</option>`).join('')}
             </select>
-
-            <label style="margin-top:16px;">قناة التقييمات</label>
-            <select name="evaluationChannelId" required>
-                <option value="">-- اختر قناة التقييمات --</option>
-                ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}" ${s.evaluationChannelId === c.id ? 'selected' : ''}># ${c.name}</option>`).join('')}
-            </select>
-            <div style="color:var(--text-muted);font-size:11px;margin-top:6px;">سيتم إرسال التقييم النهائي وبيانات المنتج المباع إلى هذه القناة.</div>
             <button class="btn-save" style="margin-top:20px;">حفظ وإرسال</button>
         </div>
     </form>`;
@@ -1748,7 +1435,7 @@ app.post('/save/:guildId/tickets', checkAuth, upload.fields([{ name: 'topImage' 
             if (menuLabel) menuOptions.push({ label: menuLabel, emoji: menuEmoji || '', adminRole: b[`menu_role_${i}`] || '', categoryId: b[`menu_category_${i}`] || '' });
         }
 
-        let updateData = { title: b.title, description: b.description, color: b.color || '#d4af37', evaluationChannelId: b.evaluationChannelId || '', buttons, menuOptions };
+        let updateData = { title: b.title, description: b.description, color: b.color || '#d4af37', buttons, menuOptions };
         if (req.files?.topImage?.[0]) updateData.topImagePath = req.files.topImage[0].path;
         if (req.files?.bottomImage?.[0]) updateData.bottomImagePath = req.files.bottomImage[0].path;
 
@@ -1862,148 +1549,95 @@ app.post('/save/:guildId/levels', checkAuth, async (req, res) => {
     res.redirect(`/manage/${req.params.guildId}/levels`);
 });
 
-// --- [ Roles Panel ] ---
-app.get('/manage/:guildId/roles', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    let s = await GuildConfig.findOne({ guildId: g.id }) || { rolesPanel: [] };
-
-    const content = `
-    <div class="card">
-        <h3>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-            لوحة الرتب الذاتية
-        </h3>
-        <form method="POST" action="/save/${g.id}/roles">
-            <label>قناة إرسال اللوحة</label>
-            <select name="rolesChannel">
-                <option value="">-- اختر القناة --</option>
-                ${g.channels.cache.filter(c => c.type === 0).map(c =>
-                    `<option value="${c.id}" ${s.rolesChannel === c.id ? 'selected' : ''}># ${c.name}</option>`
-                ).join('')}
-            </select>
-            <div style="margin-top:20px;">
-                <div style="color:var(--gold); font-size:13px; font-weight:700; margin-bottom:12px;">الرتب (حتى 10)</div>
-                ${Array.from({ length: 10 }, (_, i) => `
-                <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px; margin-bottom:10px;">
-                    <select name="role_id_${i}">
-                        <option value="">-- اختر رتبة --</option>
-                        ${g.roles.cache.filter(r => r.name !== '@everyone').map(r =>
-                            `<option value="${r.id}" ${s.rolesPanel?.[i]?.roleId === r.id ? 'selected' : ''}>${r.name}</option>`
-                        ).join('')}
-                    </select>
-                    <input name="role_label_${i}" value="${s.rolesPanel?.[i]?.label || ''}" placeholder="نص الزر ${i+1}">
-                </div>`).join('')}
-            </div>
-            <button class="btn-save" style="margin-top:12px;">حفظ اللوحة</button>
-        </form>
-    </div>`;
-
-    res.send(ui(g, 'roles', content));
-});
-app.post('/save/:guildId/roles', checkAuth, async (req, res) => {
-    const b = req.body;
-    const rolesPanel = [];
-    for (let i = 0; i < 10; i++) {
-        const roleId = b[`role_id_${i}`];
-        const label = b[`role_label_${i}`]?.trim();
-        if (roleId && label) rolesPanel.push({ roleId, label, type: 'button' });
-    }
-    
-    const config = await GuildConfig.findOneAndUpdate(
-        { guildId: req.params.guildId },
-        { $set: { rolesPanel, rolesChannel: b.rolesChannel } },
-        { upsert: true, new: true }
-    );
-
-    // إرسال اللوحة تلقائياً للروم
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (g && b.rolesChannel && rolesPanel.length > 0) {
-        const channel = g.channels.cache.get(b.rolesChannel);
-        if (channel) {
-            const rows = [];
-            let row = new ActionRowBuilder();
-            for (const r of rolesPanel) {
-                row.addComponents(new ButtonBuilder().setCustomId(`role_${r.roleId}`).setLabel(r.label).setStyle(ButtonStyle.Secondary));
-                if (row.components.length === 5) { rows.push(row); row = new ActionRowBuilder(); }
-            }
-            if (row.components.length > 0) rows.push(row);
-            
-            await channel.send({ 
-                embeds: [new EmbedBuilder().setTitle('لوحة الرتب الذاتية').setDescription('اضغط على الزر للحصول على الرتبة أو إزالتها').setColor(0xd4af37)],
-                components: rows 
-            }).catch(() => {});
-        }
-    }
-
-    res.redirect(`/manage/${req.params.guildId}/roles`);
-});
-
-
 // --- [ Notification Roles ] ---
 app.get('/manage/:guildId/notificationroles', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    const config = await GuildConfig.findOne({ guildId: g.id }).lean() || {};
+    const guild = client.guilds.cache.get(req.params.guildId);
+    if (!guild) return res.redirect('/dashboard');
+    const config = await GuildConfig.findOne({ guildId: guild.id }).lean() || {};
     const settings = config.notificationRoles || {};
-    const textChannels = g.channels.cache.filter(c => c.isTextBased?.() && c.type !== ChannelType.GuildCategory);
-    const roles = g.roles.cache.filter(r => r.name !== '@everyone');
+    const textChannels = guild.channels.cache.filter(channel =>
+        channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement
+    );
+    const roleOptions = guild.roles.cache.filter(role => role.name !== '@everyone');
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
     const content = `
     <div class="card">
-      <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg> رتب الإشعارات</h3>
-      <p style="color:var(--text-muted);line-height:1.8">ارفع صورة الرسالة، اختر قناة أو أكثر، ثم اضبط حتى ٨ رتب. عند حفظ الإعدادات تُرسل لوحة التفاعل إلى القنوات المحددة.</p>
-      <form method="POST" action="/save/${g.id}/notificationroles" enctype="multipart/form-data">
-        <label>صورة اللوحة</label><input type="file" name="notifyImage" accept="image/*">
-        ${settings.imagePath ? `<p style="color:var(--text-muted)">الصورة الحالية محفوظة. ارفع صورة جديدة لاستبدالها.</p>` : ''}
-        <label style="margin-top:16px">القنوات (يمكن اختيار أكثر من قناة)</label>
-        <select name="notifyChannels" multiple size="6" style="min-height:130px">
-          ${textChannels.map(c => `<option value="${c.id}" ${(settings.channelIds || []).includes(c.id) ? 'selected' : ''}># ${c.name}</option>`).join('')}
-        </select>
-        <div style="margin-top:20px"><div style="color:var(--gold);font-size:13px;font-weight:700;margin-bottom:12px">الرتب (حتى ٨)</div>
-          ${Array.from({length:8}, (_,i) => { const item=settings.roles?.[i] || {}; return `
-          <div style="display:grid;grid-template-columns:1.5fr 1.5fr .7fr;gap:10px;margin-bottom:10px;align-items:center">
-            <select name="notify_role_${i}"><option value="">-- اختر رتبة --</option>${roles.map(r => `<option value="${r.id}" ${item.roleId===r.id?'selected':''}>${r.name}</option>`).join('')}</select>
-            <input name="notify_label_${i}" value="${String(item.label||'').replace(/&/g,'&amp;').replace(/\"/g,'&quot;').replace(/</g,'&lt;')}" placeholder="اسم العرض ${i+1}" maxlength="100">
-            <input name="notify_emoji_${i}" value="${String(item.emoji||'').replace(/&/g,'&amp;').replace(/\"/g,'&quot;').replace(/</g,'&lt;')}" placeholder="إيموجي عادي أو ID إيموجي السيرفر">
-          </div>`; }).join('')}
-        </div>
-        <button class="btn-save" style="margin-top:12px">حفظ وإرسال اللوحة</button>
-      </form>
+        <h3><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>رتب الإشعارات</h3>
+        <p style="color:var(--muted);line-height:1.9">ارفع صورة اللوحة، اختر قناة أو أكثر، ثم حدّد الرتب وأسماء العرض والإيموجيات. عند الحفظ تُرسل اللوحة للقنوات المختارة.</p>
+        <form method="POST" action="/save/${guild.id}/notificationroles" enctype="multipart/form-data">
+            <label>صورة اللوحة</label>
+            <input type="file" name="notificationImage" accept="image/*">
+            ${settings.imagePath ? '<p style="color:var(--muted);font-size:11px">توجد صورة محفوظة؛ رفع صورة جديدة يستبدلها.</p>' : ''}
+            <label>القنوات (يمكن اختيار أكثر من قناة)</label>
+            <select name="notificationChannels" multiple size="6" style="min-height:130px">
+                ${textChannels.map(channel => `<option value="${channel.id}" ${(settings.channelIds || []).includes(channel.id) ? 'selected' : ''}># ${escapeHtml(channel.name)}</option>`).join('')}
+            </select>
+            <div style="margin-top:20px;color:var(--gold);font-weight:700;font-size:13px">الرتب (حتى ٨)</div>
+            ${Array.from({ length: 8 }, (_, index) => {
+                const item = settings.roles?.[index] || {};
+                return `<div style="display:grid;grid-template-columns:1.4fr 1.2fr .9fr;gap:10px;margin-top:10px">
+                    <select name="notificationRole_${index}"><option value="">-- اختر رتبة --</option>${roleOptions.map(role => `<option value="${role.id}" ${item.roleId === role.id ? 'selected' : ''}>${escapeHtml(role.name)}</option>`).join('')}</select>
+                    <input name="notificationLabel_${index}" value="${escapeHtml(item.label || '')}" placeholder="اسم العرض ${index + 1}" maxlength="100">
+                    <input name="notificationEmoji_${index}" value="${escapeHtml(item.emoji || '')}" placeholder="إيموجي أو ID">
+                </div>`;
+            }).join('')}
+            <button class="btn-save" style="margin-top:18px">حفظ وإرسال اللوحة</button>
+        </form>
     </div>`;
-    res.send(ui(g, 'notificationroles', content));
+    res.send(ui(guild, 'notificationroles', content));
 });
-app.post('/save/:guildId/notificationroles', checkAuth, upload.single('notifyImage'), async (req, res) => {
-    const { guildId } = req.params;
-    const previous = await GuildConfig.findOne({ guildId }).lean();
-    const settings = previous?.notificationRoles || {};
-    const channelIds = [...new Set((Array.isArray(req.body.notifyChannels) ? req.body.notifyChannels : req.body.notifyChannels ? [req.body.notifyChannels] : []).filter(id => client.guilds.cache.get(guildId)?.channels.cache.get(id)?.isTextBased?.()))];
-    const roles = [];
-    for (let i = 0; i < 8; i++) {
-        const roleId = req.body[`notify_role_${i}`];
-        const label = String(req.body[`notify_label_${i}`] || '').trim();
-        const emoji = String(req.body[`notify_emoji_${i}`] || '').trim();
-        if (roleId && label && client.guilds.cache.get(guildId)?.roles.cache.has(roleId)) roles.push({ roleId, label: label.slice(0,100), emoji: emoji.slice(0,100) });
-    }
-    const imagePath = req.file?.path || settings.imagePath || '';
-    await GuildConfig.findOneAndUpdate({ guildId }, { $set: { notificationRoles: { imagePath, channelIds, roles } } }, { upsert: true, new: true });
+
+app.post('/save/:guildId/notificationroles', checkAuth, upload.single('notificationImage'), async (req, res) => {
+    const guildId = req.params.guildId;
     const guild = client.guilds.cache.get(guildId);
-    if (guild && roles.length) {
-        const options = roles.map(r => {
-            const option = { label: r.label, value: r.roleId };
-            if (r.emoji) {
-                const emojiId = r.emoji.match(/\d{15,}/)?.[0];
+    if (!guild) return res.redirect('/dashboard');
+    const previous = await GuildConfig.findOne({ guildId }).lean();
+    const previousSettings = previous?.notificationRoles || {};
+    const postedChannels = Array.isArray(req.body.notificationChannels)
+        ? req.body.notificationChannels
+        : req.body.notificationChannels ? [req.body.notificationChannels] : [];
+    const channelIds = [...new Set(postedChannels.filter(channelId => {
+        const channel = guild.channels.cache.get(channelId);
+        return channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement);
+    }))];
+    const roles = [];
+    for (let index = 0; index < 8; index++) {
+        const roleId = String(req.body[`notificationRole_${index}`] || '');
+        const label = String(req.body[`notificationLabel_${index}`] || '').trim();
+        const emoji = String(req.body[`notificationEmoji_${index}`] || '').trim();
+        if (roleId && label && guild.roles.cache.has(roleId)) {
+            roles.push({ roleId, label: label.slice(0, 100), emoji: emoji.slice(0, 100) });
+        }
+    }
+    const imagePath = req.file?.path || previousSettings.imagePath || '';
+    await GuildConfig.findOneAndUpdate(
+        { guildId },
+        { $set: { notificationRoles: { imagePath, channelIds, roles } } },
+        { upsert: true, new: true }
+    );
+    if (roles.length) {
+        const options = roles.map(item => {
+            const option = { label: item.label, value: item.roleId };
+            if (item.emoji) {
+                const emojiId = item.emoji.match(/\d{15,}/)?.[0];
                 if (emojiId) {
                     const customEmoji = guild.emojis.cache.get(emojiId);
                     if (customEmoji) option.emoji = { id: customEmoji.id, name: customEmoji.name, animated: customEmoji.animated };
                 } else {
-                    option.emoji = { name: r.emoji };
+                    option.emoji = { name: item.emoji };
                 }
             }
             return option;
         });
-        options.push({ label: 'ريست منيو', value: '__reset_menu__', description: 'إعادة ضبط القائمة فقط' });
-        const select = new StringSelectMenuBuilder().setCustomId('notification_roles_menu').setPlaceholder('اختر رتبتك أو ريست منيو').addOptions(options);
-        const embed = new EmbedBuilder().setColor(0xd4af37).setTitle('رتب الإشعارات').setDescription('اختر الرتبة التي تريد الحصول عليها من القائمة أدناه.');
+        options.push({ label: 'ريست منيو', value: '__notification_roles_reset__', description: 'إعادة ضبط القائمة فقط' });
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId('notification_roles_menu')
+            .setPlaceholder('اختر رتبتك أو ريست منيو')
+            .addOptions(options);
+        const embed = new EmbedBuilder()
+            .setColor(0xd4af37)
+            .setTitle('رتب الإشعارات')
+            .setDescription('اختر الرتبة التي تريد الحصول عليها من القائمة أدناه.');
         const guildIcon = guild.iconURL({ size: 128 });
         if (guildIcon) embed.setThumbnail(guildIcon);
         const files = [];
@@ -2014,349 +1648,13 @@ app.post('/save/:guildId/notificationroles', checkAuth, upload.single('notifyIma
         }
         for (const channelId of channelIds) {
             const channel = guild.channels.cache.get(channelId);
-            if (channel?.isTextBased?.()) await channel.send({ embeds: [embed], files, components: [new ActionRowBuilder().addComponents(select)] }).catch(err => console.error('[Notification Roles Send Error]', err.message));
+            if (channel?.isTextBased?.()) {
+                await channel.send({ embeds: [embed], files, components: [new ActionRowBuilder().addComponents(menu)] })
+                    .catch(error => console.error('[Notification Roles Send Error]', error.message));
+            }
         }
     }
     res.redirect(`/manage/${guildId}/notificationroles`);
-});
-// --- [ Mod / Jail Config ] ---
-app.get('/manage/:guildId/mod', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    let s = await ModConfig.findOne({ guildId: g.id }) || { jail: {} };
-
-    const content = `
-    <form method="POST" action="/save/${g.id}/mod">
-        <div class="card">
-            <h3>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                إعدادات نظام السجن
-            </h3>
-            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
-                عند سجن شخص، يتم سحب جميع رتبه تلقائياً ويُعطى رتبة السجن فقط، ولن يستطيع رؤية أي روم سوى روم السجن.
-            </p>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
-                <div>
-                    <label>أمر السجن</label>
-                    <input name="jailCmd" value="${s.jail?.commandName || 'jail'}" placeholder="jail">
-                </div>
-                <div>
-                    <label>أمر فك السجن</label>
-                    <input name="unjailCmd" value="${s.jail?.unjailCommand || 'unjail'}" placeholder="unjail">
-                </div>
-            </div>
-            <label>رتبة السجن</label>
-            <select name="jailRole">
-                <option value="">-- اختر رتبة السجن --</option>
-                ${g.roles.cache.filter(r => r.name !== '@everyone').map(r =>
-                    `<option value="${r.id}" ${s.jail?.roleId === r.id ? 'selected' : ''}>${r.name}</option>`
-                ).join('')}
-            </select>
-            <label>روم السجن (الروم الوحيد الذي يراه المسجون)</label>
-            <select name="jailChannel">
-                <option value="">-- اختر روم السجن --</option>
-                ${g.channels.cache.filter(c => c.type === 0).map(c =>
-                    `<option value="${c.id}" ${s.jail?.channelId === c.id ? 'selected' : ''}># ${c.name}</option>`
-                ).join('')}
-            </select>
-            <button class="btn-save" style="margin-top:20px;">حفظ الإعدادات</button>
-        </div>
-    </form>`;
-
-    res.send(ui(g, 'mod', content));
-});
-
-app.post('/save/:guildId/mod', checkAuth, async (req, res) => {
-    await ModConfig.findOneAndUpdate(
-        { guildId: req.params.guildId },
-        { $set: {
-            'jail.commandName': req.body.jailCmd || 'jail',
-            'jail.unjailCommand': req.body.unjailCmd || 'unjail',
-            'jail.roleId': req.body.jailRole,
-            'jail.channelId': req.body.jailChannel
-        }},
-        { upsert: true }
-    );
-    res.redirect(`/manage/${req.params.guildId}/mod`);
-});
-
-// --- [ Iraqi Poetry ] ---
-app.get('/manage/:guildId/poetry', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    let s = await PoetryConfig.findOne({ guildId: g.id }) || {};
-    const totalPoems = await Poem.countDocuments();
-
-    const content = `
-    <form method="POST" action="/save/${g.id}/poetry">
-        <div class="card">
-            <h3>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-                نظام الشعر العراقي
-            </h3>
-            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
-                يقوم البوت بإرسال بيت شعر عراقي (باللهجة العراقية) بشكل دوري في الروم المحدد، بدون تكرار حتى تنتهي كل الأبيات المخزنة (يوجد حالياً <b style="color:var(--gold);">${totalPoems}</b> بيت في قاعدة البيانات).
-            </p>
-            <div class="toggle-row">
-                <label style="color:white; margin:0;">تفعيل نظام الشعر</label>
-                <input type="checkbox" name="enabled" ${s.enabled ? 'checked' : ''} style="width:20px; height:20px; accent-color:var(--gold); cursor:pointer;">
-            </div>
-            <label>روم إرسال الشعر</label>
-            <select name="channelId" required>
-                <option value="">-- اختر القناة --</option>
-                ${g.channels.cache.filter(c => c.type === 0).map(c =>
-                    `<option value="${c.id}" ${s.channelId === c.id ? 'selected' : ''}># ${c.name}</option>`
-                ).join('')}
-            </select>
-            <label>كل كم دقيقة يرسل بيت شعر جديد</label>
-            <input type="number" name="intervalMinutes" min="1" max="1440" value="${s.intervalMinutes || 2}" placeholder="2">
-            <label>رتبة يتم منشنها عند إرسال الشعر (اختياري)</label>
-            <select name="roleId">
-                <option value="">-- بدون منشن --</option>
-                ${g.roles.cache.filter(r => r.name !== '@everyone').map(r =>
-                    `<option value="${r.id}" ${s.roleId === r.id ? 'selected' : ''}>${r.name}</option>`
-                ).join('')}
-            </select>
-            <button class="btn-save" style="margin-top:20px;">حفظ إعدادات الشعر</button>
-        </div>
-    </form>`;
-
-    res.send(ui(g, 'poetry', content));
-});
-
-app.post('/save/:guildId/poetry', checkAuth, async (req, res) => {
-    const { guildId } = req.params;
-    const b = req.body;
-    const intervalMinutes = Math.min(1440, Math.max(1, parseInt(b.intervalMinutes) || 2));
-    await PoetryConfig.findOneAndUpdate(
-        { guildId },
-        { $set: {
-            enabled: b.enabled === 'on',
-            channelId: b.channelId || '',
-            intervalMinutes,
-            roleId: b.roleId || ''
-        }},
-        { upsert: true }
-    );
-    res.redirect(`/manage/${guildId}/poetry`);
-});
-
-
-
-// --- [ Dashboard - Bulk Moderation ] ---
-function parseExcludedIds(value) {
-    return new Set(String(value || '').split(/[\s,؛،]+/).map(x => x.trim()).filter(x => /^\d{15,22}$/.test(x)));
-}
-function actionNotice(type, message) {
-    const color = type === 'error' ? 'var(--red)' : 'var(--gold)';
-    return `<div style="padding:13px 16px;border:1px solid ${color};border-radius:12px;background:rgba(244,194,76,.08);color:${color};margin-bottom:18px;font-weight:700;">${message}</div>`;
-}
-app.get('/manage/:guildId/massban', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId); if (!g) return res.redirect('/dashboard');
-    const botMember = g.members.me || await g.members.fetch(client.user.id).catch(() => null);
-    const canBan = !!botMember?.permissions.has(PermissionFlagsBits.BanMembers);
-    const notice = req.query.notice ? actionNotice(req.query.type === 'error' ? 'error' : 'ok', String(req.query.notice).replace(/[<>"']/g, '')) : '';
-    const content = `${notice}<div class="card"><h3>تبنيد عدد محدد من الأشخاص</h3><p style="color:var(--text-muted);font-size:13px;line-height:1.9;">اكتب العدد المطلوب. سيختار البوت أعضاءً يمكنه تبنيدهم فقط، ولن يتجاوز مالك السيرفر أو الأعضاء الأعلى من رتبة البوت أو الأعضاء الموجودين في قائمة الاستثناء.</p><div style="padding:12px 14px;border-radius:12px;border:1px solid ${canBan ? 'rgba(95,208,131,.35)' : 'rgba(225,77,67,.45)'};color:${canBan ? '#8de4a6' : 'var(--red)'};margin-bottom:18px;">${canBan ? 'صلاحية التبنيد متوفرة للبوت.' : 'البوت لا يملك صلاحية Ban Members.'}</div><form method="POST" action="/manage/${g.id}/massban" onsubmit="return confirm('سيتم تنفيذ التبنيد مباشرة. هل تريد المتابعة؟');"><label>عدد الأشخاص المطلوب تبنيدهم</label><input type="number" name="count" min="1" max="500" required placeholder="مثال: 10"><label>استثناءات (User IDs فقط، افصل بينها بفواصل أو أسطر)</label><textarea name="excludedIds" rows="5" placeholder="123456789012345678\n987654321098765432"></textarea><small style="display:block;color:var(--text-muted);margin-top:8px;">فعّل Developer Mode في Discord لنسخ User ID.</small><button class="btn-save" type="submit" style="margin-top:20px;" ${canBan ? '' : 'disabled'}>تم — ابدأ التبنيد</button></form></div>`;
-    res.send(ui(g, 'massban', content));
-});
-app.post('/manage/:guildId/massban', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId); if (!g) return res.redirect('/dashboard');
-    const count = Math.min(500, Math.max(1, Number.parseInt(req.body.count, 10) || 0));
-    const excluded = parseExcludedIds(req.body.excludedIds);
-    const botMember = g.members.me || await g.members.fetch(client.user.id).catch(() => null);
-    if (!count || !botMember?.permissions.has(PermissionFlagsBits.BanMembers)) return res.redirect(`/manage/${g.id}/massban?type=error&notice=${encodeURIComponent('العدد غير صالح أو صلاحية التبنيد غير متوفرة.')}`);
-    try {
-        const members = await g.members.fetch();
-        const candidates = [...members.values()].filter(member => !member.user.bot && member.id !== g.ownerId && !excluded.has(member.id) && member.bannable && botMember.roles.highest.comparePositionTo(member.roles.highest) > 0).slice(0, count);
-        let banned = 0;
-        for (const member of candidates) if (await member.ban({ reason: `تبنيد جماعي من لوحة التحكم بواسطة ${req.user.username || req.user.id}` }).then(() => true).catch(() => false)) banned++;
-        return res.redirect(`/manage/${g.id}/massban?type=${banned ? 'ok' : 'error'}&notice=${encodeURIComponent(`تم تبنيد ${banned} من أصل ${count}. تم تجاوز ${count - banned} بسبب الرتبة أو الاستثناءات أو عدم إمكانية التبنيد.`)}`);
-    } catch (err) { console.error('[Mass Ban Error]', err); return res.redirect(`/manage/${g.id}/massban?type=error&notice=${encodeURIComponent('حدث خطأ أثناء تنفيذ التبنيد.')}`); }
-});
-app.get('/manage/:guildId/channelswipe', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId); if (!g) return res.redirect('/dashboard');
-    const botMember = g.members.me || await g.members.fetch(client.user.id).catch(() => null);
-    const canManage = !!botMember?.permissions.has(PermissionFlagsBits.ManageChannels);
-    const notice = req.query.notice ? actionNotice(req.query.type === 'error' ? 'error' : 'ok', String(req.query.notice).replace(/[<>"']/g, '')) : '';
-    const content = `${notice}<div class="card"><h3>حذف جميع الرومات</h3><p style="color:var(--text-muted);font-size:13px;line-height:1.9;">هذا الإجراء يحذف كل القنوات والتصنيفات نهائيًا ولا يمكن التراجع عنه. لن يبدأ التنفيذ إلا بعد كتابة عبارة التأكيد حرفيًا.</p><div style="padding:14px;border:1px solid rgba(225,77,67,.5);border-radius:12px;background:rgba(225,77,67,.1);color:#ffaaa3;margin-bottom:18px;font-weight:700;">تحذير: سيتم حذف ${g.channels.cache.size} رومًا/تصنيفًا.</div><form method="POST" action="/manage/${g.id}/channelswipe" onsubmit="return confirm('تحذير أخير: حذف جميع الرومات نهائي. هل تريد المتابعة؟');"><label>اكتب: حذف كل الرومات</label><input name="confirmation" required autocomplete="off" placeholder="حذف كل الرومات"><button class="btn-save" type="submit" style="margin-top:20px;background:linear-gradient(100deg,#e14d43,#a5221d);" ${canManage ? '' : 'disabled'}>تم — احذف جميع الرومات</button></form></div>`;
-    res.send(ui(g, 'channelswipe', content));
-});
-app.post('/manage/:guildId/channelswipe', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId); if (!g) return res.redirect('/dashboard');
-    const botMember = g.members.me || await g.members.fetch(client.user.id).catch(() => null);
-    if (req.body.confirmation !== 'حذف كل الرومات') return res.redirect(`/manage/${g.id}/channelswipe?type=error&notice=${encodeURIComponent('عبارة التأكيد غير صحيحة، لم يتم حذف أي روم.')}`);
-    if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return res.redirect(`/manage/${g.id}/channelswipe?type=error&notice=${encodeURIComponent('البوت لا يملك صلاحية Manage Channels.')}`);
-    try {
-        const channels = [...g.channels.cache.values()].sort((a, b) => (a.type === ChannelType.GuildCategory ? 1 : 0) - (b.type === ChannelType.GuildCategory ? 1 : 0));
-        let deleted = 0;
-        for (const channel of channels) if (await channel.delete('حذف جماعي من لوحة التحكم').then(() => true).catch(() => false)) deleted++;
-        return res.redirect(`/manage/${g.id}/channelswipe?type=${deleted ? 'ok' : 'error'}&notice=${encodeURIComponent(`تم حذف ${deleted} من أصل ${channels.length} قناة/تصنيف.`)}`);
-    } catch (err) { console.error('[Delete All Channels Error]', err); return res.redirect(`/manage/${g.id}/channelswipe?type=error&notice=${encodeURIComponent('حدث خطأ أثناء حذف الرومات.')}`); }
-});
-
-
-// --- [ Dashboard - Server Sale / Cleanup Center ] ---
-function cleanupDelay(ms = 650) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-function cleanDashboardText(value, max = 100) {
-    return String(value || '').replace(/[<>]/g, '').trim().slice(0, max);
-}
-function cleanupNotice(type, message) {
-    const color = type === 'error' ? 'var(--red)' : 'var(--gold)';
-    return `<div style="padding:13px 16px;border:1px solid ${color};border-radius:12px;background:rgba(244,194,76,.08);color:${color};margin-bottom:18px;font-weight:700;">${String(message).replace(/[<>&\"']/g, '')}</div>`;
-}
-function cleanupConfirm(action) {
-    const phrases = {
-        renameGuild: 'تغيير اسم السيرفر؟',
-        renameChannels: 'سيتم تغيير أسماء جميع الرومات. متابعة؟',
-        broadcastChannels: 'سيتم إرسال الرسالة في كل الرومات النصية. متابعة؟',
-        broadcastMembers: 'سيتم إرسال رسالة خاصة للأعضاء. متابعة؟',
-        massBan: 'سيتم تبنيد الأعضاء القابلين للتبنيد. متابعة؟',
-        deleteRoles: 'سيتم حذف الرتب القابلة للحذف نهائياً. متابعة؟',
-        deleteChannels: 'سيتم حذف جميع الرومات والتصنيفات نهائياً. متابعة؟'
-    };
-    return `return confirm(${JSON.stringify(phrases[action] || 'متابعة العملية؟')})`;
-}
-
-app.get('/manage/:guildId/cleanup', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    const botMember = g.members.me || await g.members.fetch(client.user.id).catch(() => null);
-    const notice = req.query.notice ? cleanupNotice(req.query.type === 'error' ? 'error' : 'ok', req.query.notice) : '';
-    const canManageGuild = !!botMember?.permissions.has(PermissionFlagsBits.ManageGuild);
-    const canManageChannels = !!botMember?.permissions.has(PermissionFlagsBits.ManageChannels);
-    const canManageRoles = !!botMember?.permissions.has(PermissionFlagsBits.ManageRoles);
-    const canBan = !!botMember?.permissions.has(PermissionFlagsBits.BanMembers);
-    const textChannels = [...g.channels.cache.values()].filter(c => c.isTextBased?.() && !c.isThread?.());
-    const memberCount = g.memberCount || g.members.cache.size;
-    const roleCount = g.roles.cache.filter(r => r.id !== g.id && !r.managed).size;
-    const channelCount = g.channels.cache.size;
-
-    const content = `${notice}
-    <div class="card" style="border:1px solid rgba(244,194,76,.35);">
-      <h2 style="margin:0 0 8px;">مركز بيع السيرفر وتفريغه</h2>
-      <p style="color:var(--text-muted);line-height:1.9;margin-top:0;">كل العمليات المطلوبة في صفحة واحدة. الإرسال الجماعي يتم بالتتابع لتجنب تجاوز حدود Discord.</p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:18px 0 22px;">
-        <div class="card" style="margin:0;padding:14px;"><b>${memberCount}</b><small style="display:block;color:var(--text-muted);">الأعضاء</small></div>
-        <div class="card" style="margin:0;padding:14px;"><b>${channelCount}</b><small style="display:block;color:var(--text-muted);">الرومات</small></div>
-        <div class="card" style="margin:0;padding:14px;"><b>${roleCount}</b><small style="display:block;color:var(--text-muted);">الرتب القابلة للحذف</small></div>
-      </div>
-    </div>
-
-    <div class="card"><h3>تغيير اسم السيرفر</h3>
-      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('renameGuild')}">
-        <input type="hidden" name="action" value="renameGuild"><label>الاسم الجديد</label>
-        <input name="name" maxlength="100" value="${cleanDashboardText(g.name)}" required>
-        <button class="btn-save" type="submit" ${canManageGuild ? '' : 'disabled'}>تغيير اسم السيرفر</button>
-      </form>
-    </div>
-
-    <div class="card"><h3>إعادة تسمية كل الرومات</h3>
-      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('renameChannels')}">
-        <input type="hidden" name="action" value="renameChannels"><label>الاسم الموحد للرومات</label>
-        <input name="name" maxlength="100" placeholder="مثال: للبيع" required>
-        <button class="btn-save" type="submit" ${canManageChannels ? '' : 'disabled'}>تسمية كل الرومات</button>
-      </form>
-    </div>
-
-    <div class="card"><h3>برودكاست داخل الرومات</h3>
-      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('broadcastChannels')}">
-        <input type="hidden" name="action" value="broadcastChannels"><label>الرسالة</label>
-        <textarea name="message" rows="5" maxlength="2000" required placeholder="السيرفر معروض للبيع...">السيرفر معروض للبيع، للتواصل يرجى مراسلتي.</textarea>
-        <button class="btn-save" type="submit" ${textChannels.length && canManageChannels ? '' : 'disabled'}>إرسال في ${textChannels.length} روم</button>
-      </form>
-    </div>
-
-    <div class="card"><h3>برودكاست خاص لكل الأعضاء</h3>
-      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('broadcastMembers')}">
-        <input type="hidden" name="action" value="broadcastMembers"><label>الرسالة الخاصة</label>
-        <textarea name="message" rows="5" maxlength="2000" required placeholder="اكتب رسالة البيع للأعضاء"></textarea>
-        <button class="btn-save" type="submit">إرسال خاص للأعضاء</button>
-      </form>
-    </div>
-
-    <div class="card"><h3 style="color:#ffaaa3;">تبنيد جميع الأعضاء</h3>
-      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('massBan')}">
-        <input type="hidden" name="action" value="massBan"><p style="color:var(--text-muted);">سيُستثنى البوت ومالك السيرفر وأي عضو أعلى من رتبة البوت تلقائياً.</p>
-        <button class="btn-save" type="submit" style="background:linear-gradient(100deg,#e14d43,#a5221d);" ${canBan ? '' : 'disabled'}>تبنيد القابلين للتبنيد</button>
-      </form>
-    </div>
-
-    <div class="card"><h3 style="color:#ffaaa3;">حذف جميع الرتب</h3>
-      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('deleteRoles')}">
-        <input type="hidden" name="action" value="deleteRoles"><p style="color:var(--text-muted);">لن يحذف Discord رتبة @everyone أو الرتب المرتبطة ببوتات/تكاملات.</p>
-        <button class="btn-save" type="submit" style="background:linear-gradient(100deg,#e14d43,#a5221d);" ${canManageRoles ? '' : 'disabled'}>حذف الرتب القابلة للحذف</button>
-      </form>
-    </div>
-
-    <div class="card"><h3 style="color:#ffaaa3;">حذف جميع الرومات</h3>
-      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('deleteChannels')}">
-        <input type="hidden" name="action" value="deleteChannels"><p style="color:var(--text-muted);">سيتم حذف ${channelCount} روم/تصنيف نهائياً.</p>
-        <button class="btn-save" type="submit" style="background:linear-gradient(100deg,#e14d43,#a5221d);" ${canManageChannels ? '' : 'disabled'}>حذف جميع الرومات</button>
-      </form>
-    </div>`;
-    res.send(ui(g, 'cleanup', content));
-});
-
-app.post('/manage/:guildId/cleanup', checkAuth, async (req, res) => {
-    const g = client.guilds.cache.get(req.params.guildId);
-    if (!g) return res.redirect('/dashboard');
-    const action = String(req.body.action || '');
-    const botMember = g.members.me || await g.members.fetch(client.user.id).catch(() => null);
-    const fail = message => res.redirect(`/manage/${g.id}/cleanup?type=error&notice=${encodeURIComponent(message)}`);
-    const ok = message => res.redirect(`/manage/${g.id}/cleanup?type=ok&notice=${encodeURIComponent(message)}`);
-    try {
-        if (action === 'renameGuild') {
-            if (!botMember?.permissions.has(PermissionFlagsBits.ManageGuild)) return fail('البوت لا يملك Manage Server.');
-            const name = cleanDashboardText(req.body.name);
-            if (!name) return fail('اسم السيرفر غير صالح.');
-            await g.setName(name, 'تغيير اسم السيرفر من لوحة البيع');
-            return ok('تم تغيير اسم السيرفر.');
-        }
-        if (action === 'renameChannels') {
-            if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return fail('البوت لا يملك Manage Channels.');
-            const name = cleanDashboardText(req.body.name);
-            if (!name) return fail('اسم الرومات غير صالح.');
-            const channels = [...g.channels.cache.values()]; let changed = 0;
-            for (const channel of channels) { if (await channel.setName(name, 'إعادة تسمية جماعية من لوحة البيع').then(() => true).catch(() => false)) changed++; await cleanupDelay(350); }
-            return ok(`تم تغيير أسماء ${changed} روم/تصنيف.`);
-        }
-        if (action === 'broadcastChannels') {
-            const message = cleanDashboardText(req.body.message, 2000); if (!message) return fail('الرسالة فارغة.');
-            const channels = [...g.channels.cache.values()].filter(c => c.isTextBased?.() && !c.isThread?.()); let sent = 0;
-            for (const channel of channels) { if (await channel.send({ content: message, allowedMentions: { parse: [] } }).then(() => true).catch(() => false)) sent++; await cleanupDelay(750); }
-            return ok(`تم إرسال الرسالة في ${sent} من أصل ${channels.length} روم.`);
-        }
-        if (action === 'broadcastMembers') {
-            const message = cleanDashboardText(req.body.message, 2000); if (!message) return fail('الرسالة فارغة.');
-            const members = await g.members.fetch(); let sent = 0, skipped = 0;
-            for (const member of members.values()) { if (member.user.bot) { skipped++; continue; } if (await member.send({ content: message, allowedMentions: { parse: [] } }).then(() => true).catch(() => false)) sent++; else skipped++; await cleanupDelay(1100); }
-            return ok(`تم إرسال الخاص إلى ${sent} عضو، وتعذر الإرسال إلى ${skipped}.`);
-        }
-        if (action === 'massBan') {
-            if (!botMember?.permissions.has(PermissionFlagsBits.BanMembers)) return fail('البوت لا يملك Ban Members.');
-            const members = await g.members.fetch(); let banned = 0, skipped = 0;
-            for (const member of members.values()) { if (member.user.bot || member.id === g.ownerId || !member.bannable || botMember.roles.highest.comparePositionTo(member.roles.highest) <= 0) { skipped++; continue; } if (await member.ban({ reason: 'تفريغ سيرفر للبيع من لوحة التحكم' }).then(() => true).catch(() => false)) banned++; else skipped++; await cleanupDelay(700); }
-            return ok(`تم تبنيد ${banned} عضو، وتعذر/تم تجاوز ${skipped}.`);
-        }
-        if (action === 'deleteRoles') {
-            if (!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)) return fail('البوت لا يملك Manage Roles.');
-            const roles = [...g.roles.cache.values()].filter(r => r.id !== g.id && !r.managed && r.editable); let deleted = 0;
-            for (const role of roles) { if (await role.delete('حذف الرتب من لوحة بيع السيرفر').then(() => true).catch(() => false)) deleted++; await cleanupDelay(450); }
-            return ok(`تم حذف ${deleted} من أصل ${roles.length} رتبة.`);
-        }
-        if (action === 'deleteChannels') {
-            if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return fail('البوت لا يملك Manage Channels.');
-            const channels = [...g.channels.cache.values()].sort((a, b) => (a.type === ChannelType.GuildCategory ? 1 : 0) - (b.type === ChannelType.GuildCategory ? 1 : 0)); let deleted = 0;
-            for (const channel of channels) { if (await channel.delete('حذف الرومات من لوحة بيع السيرفر').then(() => true).catch(() => false)) deleted++; await cleanupDelay(500); }
-            return ok(`تم حذف ${deleted} من أصل ${channels.length} روم/تصنيف.`);
-        }
-        return fail('العملية غير معروفة.');
-    } catch (error) {
-        console.error('[Cleanup Dashboard Error]', error);
-        return fail('حدث خطأ أثناء تنفيذ العملية. راجع سجل الخادم.');
-    }
 });
 
 // ==========================================
@@ -2422,38 +1720,6 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
     } catch (e) {}
 
 
-    // --- [ أمر تحكم داخل روم التكت ] ---
-    if (msg.content.trim() === 'تحكم') {
-        const ticketData = await TicketData.findOne({ guildId: msg.guild.id, channelId: msg.channel.id });
-        if (!ticketData) return;
-
-        const isTicketAdmin = msg.member.permissions.has(PermissionFlagsBits.Administrator)
-            || Boolean(ticketData.adminRole && msg.member.roles.cache.has(ticketData.adminRole));
-        if (!isTicketAdmin) return;
-
-        const controlMenu = new StringSelectMenuBuilder()
-            .setCustomId('ticket_control_menu')
-            .setPlaceholder('لوحة التحكم بالتكت')
-            .addOptions([
-                { label: 'استلام التكت', value: 'claim_ticket', description: 'استلام التكت للمعالجة' },
-                { label: 'إتمام عملية البيع', value: 'complete_sale', description: 'بدء التقييم وإتمام بيانات البيع' },
-                { label: 'اغلاق التكت', value: 'close_ticket', description: 'اغلاق وحذف التكت' },
-                { label: 'اضافة شخص', value: 'add_member', description: 'اضافة شخص للتكت' },
-                { label: 'ازالة شخص', value: 'remove_member', description: 'ازالة شخص من التكت' },
-                { label: 'استدعاء صاحب التكت', value: 'summon_member', description: 'استدعاء صاحب التكت' }
-            ]);
-
-        await msg.channel.send({
-            embeds: [new EmbedBuilder()
-                .setColor(0xd4af37)
-                .setTitle('لوحة تحكم التكت')
-                .setDescription('اختر الإجراء المطلوب من القائمة أدناه.')],
-            components: [new ActionRowBuilder().addComponents(controlMenu)]
-        });
-        return;
-    }
-
-
     // --- [ نظام الاقتراحات ] ---
     try {
         const sugCfg = await SuggestionConfig.findOne({ guildId: msg.guild.id, channelId: msg.channel.id });
@@ -2468,7 +1734,7 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
                     .setAuthor({ name: `اقتراح من ${msg.author.username}`, iconURL: authorAvatar })
                     .setDescription(content || '*بدون نص*')
                     .setColor(0xd4af37)
-                    .setFooter({ text: 'VORTEX  - Suggestions' })
+                    .setFooter({ text: 'Drayz System  - Suggestions' })
                     .setTimestamp()
                     .addFields(
                         { name: getEmojiDisplay(msg.guild, sugCfg.emoji1), value: '0', inline: true },
@@ -2611,26 +1877,6 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
         }
     }
 
-    // --- [ أمر !rolespanel ] ---
-    if (msg.content === '!rolespanel') {
-        const config = await GuildConfig.findOne({ guildId: msg.guild.id });
-        if (!config?.rolesPanel?.length) return msg.reply('ما في رتب مضافة');
-        const channel = msg.guild.channels.cache.get(config.rolesChannel);
-        if (!channel) return msg.reply('الروم غير موجود');
-
-        const rows = [];
-        let row = new ActionRowBuilder();
-        for (const r of config.rolesPanel) {
-            if (r.type === 'button') {
-                row.addComponents(new ButtonBuilder().setCustomId(`role_${r.roleId}`).setLabel(r.label).setStyle(ButtonStyle.Secondary));
-            }
-            if (row.components.length === 5) { rows.push(row); row = new ActionRowBuilder(); }
-        }
-        if (row.components.length > 0) rows.push(row);
-        channel.send({ content: 'نظام الرتب', components: rows });
-        msg.reply('تم إرسال لوحة الرتب');
-    }
-
     // --- [ الرد الآلي ] ---
     const r = s.autoReply?.find(x => x.trigger && msg.content.toLowerCase() === x.trigger.toLowerCase());
     if (r) return msg.reply(r.reply).catch(() => {});
@@ -2768,100 +2014,6 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
 
         const attachment = new AttachmentBuilder(canvas.toBuffer(), { name: 'aboud-profile.png' });
         msg.reply({ files: [attachment] });
-    }
-
-    // --- [ نظام السجن ] ---
-    const modConfig = await ModConfig.findOne({ guildId: msg.guild.id });
-    if (modConfig && modConfig.jail && msg.content.startsWith('!')) {
-        const prefix = '!';
-        const args = msg.content.slice(prefix.length).trim().split(/ +/);
-        const command = args.shift().toLowerCase();
-
-        // أمر السجن
-        if (command === modConfig.jail.commandName.toLowerCase()) {
-            const isAdmin = msg.member.permissions.has(PermissionFlagsBits.Administrator);
-            const hasAdminRole = modConfig.jail.adminRoles?.some(rId => msg.member.roles.cache.has(rId));
-            if (!isAdmin && !hasAdminRole) return msg.reply('عذراً، هذا الأمر مخصص للإدارة فقط!');
-
-            const target = msg.mentions.members.first();
-            const timeInput = args.find(arg => /\d+[smhdw]/.test(arg));
-
-            if (!target || !timeInput) return msg.reply(`الاستخدام الصحيح: \`!${command} @user 1h\``);
-            if (target.id === msg.author.id) return msg.reply('لا يمكنك سجن نفسك!');
-            if (target.user.bot) return msg.reply('لا يمكنك سجن البوتات!');
-
-            if (msg.author.id !== msg.guild.ownerId) {
-                if (target.roles.highest.position >= msg.member.roles.highest.position) {
-                    return msg.reply('لا يمكنك سجن شخص رتبته أعلى منك أو مساوية لرتبتك!');
-                }
-            }
-
-            const durationMs = ms(timeInput);
-            if (!durationMs) return msg.reply('صيغة الوقت غير صحيحة (مثال: 10m, 1h, 1d)');
-
-            const jailRole = msg.guild.roles.cache.get(modConfig.jail.roleId);
-            if (!jailRole) return msg.reply('رتبة السجن غير مضبوطة في الداشبورد!');
-
-            try {
-                const currentRoles = target.roles.cache.filter(r => r.id !== msg.guild.id).map(r => r.id);
-                await JailData.findOneAndUpdate(
-                    { guildId: msg.guild.id, userId: target.id },
-                    { oldRoles: currentRoles, endAt: new Date(Date.now() + durationMs) },
-                    { upsert: true }
-                );
-
-                // سحب كل الرتب وإعطاء رتبة السجن فقط
-                await target.roles.set([jailRole.id]).catch(() => {
-                    return msg.reply('فشل سحب الرتب، تأكد أن رتبة البوت أعلى من رتبة العضو.');
-                });
-
-                // إخفاء كل الرومات عن المسجون (تلقائي عبر رتبة السجن)
-                // يجب أن تكون رتبة السجن تمنع ViewChannel في كل الرومات
-                const jailChannel = msg.guild.channels.cache.get(modConfig.jail.channelId);
-                if (jailChannel) {
-                    // السماح للمسجون برؤية روم السجن فقط
-                    await jailChannel.permissionOverwrites.edit(target.id, {
-                        ViewChannel: true,
-                        SendMessages: true
-                    }).catch(() => {});
-                }
-
-                const embed = new EmbedBuilder()
-                    .setTitle('تم السجن')
-                    .setDescription(`تم سجن ${target} لمدة **${timeInput}**`)
-                    .setColor(0xe63946)
-                    .addFields(
-                        { name: 'العضو', value: `${target}`, inline: true },
-                        { name: 'بواسطة', value: `${msg.author}`, inline: true },
-                        { name: 'المدة', value: timeInput, inline: true }
-                    )
-                    .setTimestamp();
-
-                msg.channel.send({ embeds: [embed] });
-                setTimeout(async () => { await handleUnjail(target, msg.guild.id); }, durationMs);
-            } catch (e) {
-                console.error('[Jail Error]', e);
-                msg.reply('حدث خطأ فني أثناء محاولة السجن.');
-            }
-        }
-
-        // أمر فك السجن
-        if (command === (modConfig.jail.unjailCommand || 'unjail').toLowerCase()) {
-            const isAdmin = msg.member.permissions.has(PermissionFlagsBits.Administrator);
-            const hasAdminRole = modConfig.jail.adminRoles?.some(rId => msg.member.roles.cache.has(rId));
-            if (!isAdmin && !hasAdminRole) return msg.reply('عذراً، لا تملك صلاحيات لفك السجن!');
-
-            const target = msg.mentions.members.first();
-            if (!target) return msg.reply('يرجى منشن العضو لفك سجنه!');
-            await handleUnjail(target, msg.guild.id);
-
-            const embed = new EmbedBuilder()
-                .setTitle('فك السجن')
-                .setDescription(`تم فك سجن ${target} واسترجاع رتبه كاملة.`)
-                .setColor(0x00c853)
-                .setTimestamp();
-            msg.channel.send({ embeds: [embed] });
-        }
     }
 
 });
@@ -3104,7 +2256,7 @@ client.on('guildMemberAdd', async (member) => {
             .setDescription(welcomeMsg)
             .setColor(0xd4af37)
             .setTimestamp()
-            .setFooter({ text: `VORTEX  - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
+            .setFooter({ text: `Drayz System  - العضو رقم ${member.guild.memberCount}`, iconURL: member.guild.iconURL() });
 
         try {
             const canvas = createCanvas(800, 400);
@@ -3252,6 +2404,26 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 client.on('interactionCreate', async (interaction) => {
     try {
         if (!interaction.guild) return;
+        if (interaction.isStringSelectMenu() && interaction.customId === 'notification_roles_menu') {
+            const selectedRoleId = interaction.values[0];
+            if (selectedRoleId === '__notification_roles_reset__') {
+                return interaction.reply({ content: 'تم ترسيت المنيو', ephemeral: true });
+            }
+            const config = await GuildConfig.findOne({ guildId: interaction.guild.id }).lean();
+            const roleConfig = config?.notificationRoles?.roles?.find(item => item.roleId === selectedRoleId);
+            const role = interaction.guild.roles.cache.get(selectedRoleId);
+            if (!role || !roleConfig) return interaction.reply({ content: 'هذه الرتبة لم تعد متاحة.', ephemeral: true });
+            const botMember = interaction.guild.members.me;
+            if (!botMember?.permissions.has(PermissionFlagsBits.ManageRoles) || role.position >= botMember.roles.highest.position) {
+                return interaction.reply({ content: 'لا يملك البوت صلاحية كافية لإعطاء هذه الرتبة.', ephemeral: true });
+            }
+            if (interaction.member.roles.cache.has(selectedRoleId)) {
+                return interaction.reply({ content: `لديك رتبة **${roleConfig.label}** بالفعل.`, ephemeral: true });
+            }
+            await interaction.member.roles.add(selectedRoleId);
+            return interaction.reply({ content: `تم منحك رتبة **${roleConfig.label}**.`, ephemeral: true });
+        }
+
 
         // --- [ Giveaway Join Button ] ---
         if (interaction.isButton() && interaction.customId.startsWith('giveaway_join:')) {
@@ -3590,7 +2762,7 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle(title)
                     .setDescription(text)
                     .setColor(0xd4af37)
-                    .setFooter({ text: `VORTEX  - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
+                    .setFooter({ text: `Drayz System  - إعلان رسمي بواسطة ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
                     .setTimestamp();
                 if (image) embed.setImage(image.url);
 
@@ -3641,7 +2813,7 @@ client.on('interactionCreate', async (interaction) => {
                         { name: 'عدد الرتب', value: `${g.roles.cache.size}`, inline: true },
                         { name: 'تاريخ الإنشاء', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:D>`, inline: true },
                     )
-                    .setFooter({ text: 'VORTEX ' })
+                    .setFooter({ text: 'Drayz System ' })
                     .setTimestamp();
                 return interaction.reply({ embeds: [embed] });
             }
@@ -3747,53 +2919,6 @@ client.on('interactionCreate', async (interaction) => {
             if (!emoji) return reply('الإيموجي غير موجود في السيرفر.', true); return reply(`**${emoji.name}**\nID: ${emoji.id}\nمتحرك: ${emoji.animated ? 'نعم' : 'لا'}\nالاستخدام: ${emoji}`);
         }
 
-        if (interaction.isButton() && interaction.customId === 'notification_roles_reset') {
-            return interaction.reply({ content: 'تم. لم يتم تغيير أي رتبة.', ephemeral: true });
-        }
-        if (interaction.isStringSelectMenu() && interaction.customId === 'notification_roles_menu') {
-            const roleId = interaction.values[0];
-            if (roleId === '__reset_menu__') return interaction.reply({ content: 'تم ترسيت المنيو', ephemeral: true });
-            const settings = await GuildConfig.findOne({ guildId: interaction.guild.id }).lean();
-            const roleConfig = settings?.notificationRoles?.roles?.find(r => r.roleId === roleId);
-            const role = interaction.guild.roles.cache.get(roleId);
-            if (!role || !roleConfig) return interaction.reply({ content: 'هذه الرتبة لم تعد متاحة.', ephemeral: true });
-            if (!interaction.guild.members.me?.permissions.has(PermissionFlagsBits.ManageRoles) || role.position >= interaction.guild.members.me.roles.highest.position) return interaction.reply({ content: 'لا يملك البوت صلاحية كافية لإعطاء هذه الرتبة.', ephemeral: true });
-            if (interaction.member.roles.cache.has(roleId)) return interaction.reply({ content: `لديك رتبة **${roleConfig.label}** بالفعل.`, ephemeral: true });
-            await interaction.member.roles.add(roleId);
-            return interaction.reply({ content: `تم منحك رتبة **${roleConfig.label}**.`, ephemeral: true });
-        }
-        // --- [ Self Roles ] ---
-        if (interaction.isButton() && interaction.customId.startsWith('role_')) {
-            try {
-                const roleId = interaction.customId.replace('role_', '');
-                const role = interaction.guild.roles.cache.get(roleId);
-                if (!role) return interaction.reply({ content: 'الرتبة غير موجودة.', ephemeral: true });
-
-                const guildData = await GuildConfig.findOne({ guildId: interaction.guild.id });
-                const allPanelRoles = (guildData?.rolesPanel || []).map(r => r.roleId);
-
-                if (interaction.member.roles.cache.has(roleId)) {
-                    await interaction.member.roles.remove(roleId).catch(() => {});
-                    return interaction.reply({ content: `تم سحب رتبة **${role.name}** منك.`, ephemeral: true });
-                }
-
-                if (role.position >= interaction.guild.members.me.roles.highest.position) {
-                    return interaction.reply({ content: 'رتبة البوت أقل من الرتبة المطلوبة.', ephemeral: true });
-                }
-
-                if (allPanelRoles.length > 0) {
-                    const rolesToRemove = interaction.member.roles.cache.filter(r => allPanelRoles.includes(r.id));
-                    if (rolesToRemove.size > 0) await interaction.member.roles.remove(rolesToRemove).catch(() => {});
-                }
-
-                await interaction.member.roles.add(roleId);
-                return interaction.reply({ content: `تم إعطاؤك رتبة **${role.name}**.`, ephemeral: true });
-            } catch (err) {
-                console.error('[Role Error]', err);
-                if (!interaction.replied) interaction.reply({ content: 'حدث خطأ، جرب مرة أخرى.', ephemeral: true });
-            }
-        }
-
         // --- [ Rename Buttons ] ---
         if (interaction.isButton() && interaction.customId.startsWith('rename_user:')) {
             const newName = interaction.customId.split(':')[1];
@@ -3816,72 +2941,22 @@ client.on('interactionCreate', async (interaction) => {
 
             const tConfig = await TicketConfig.findOne({ guildId: interaction.guild.id });
             const adminRole = ticketData.adminRole;
-            const isAdmin = Boolean(adminRole && interaction.member.roles.cache.has(adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+            const isAdmin = Boolean(adminRole && interaction.member.roles.cache.has(adminRole));
             const isOwner = ticketData.ownerId === interaction.user.id;
 
             if (selected === 'claim_ticket') {
                 if (!isAdmin) return interaction.reply({ content: 'فقط الإدارة يمكنهم استلام التكت.', ephemeral: true });
                 ticketData.claimedBy = interaction.user.id;
-                ticketData.claimedByName = interaction.user.globalName || interaction.user.username;
-                ticketData.claimedAt = new Date();
                 await ticketData.save();
                 return interaction.reply({ content: `تم استلام التكت بواسطة ${interaction.user}.`, ephemeral: false });
             }
 
-            if (selected === 'complete_sale') {
-                if (!isAdmin) return interaction.reply({ content: 'فقط الإدارة يمكنها إتمام عملية البيع.', ephemeral: true });
-                const stars = new ActionRowBuilder().addComponents([1, 2, 3, 4, 5].map(n => new ButtonBuilder().setCustomId(`ticket_rating:${n}`).setLabel(`${'★'.repeat(n)}${'☆'.repeat(5 - n)}`).setStyle(ButtonStyle.Secondary)));
-                return interaction.reply({ embeds: [new EmbedBuilder().setColor(0x808080).setTitle('تقييم عملية البيع').setDescription('يرجى من صاحب التكت اختيار التقييم بالنجوم.')], components: [stars] });
-            }
-
             if (selected === 'close_ticket') {
                 if (!isAdmin && !isOwner) return interaction.reply({ content: 'ليس لديك صلاحية لإغلاق التكت.', ephemeral: true });
-                await interaction.deferReply({ ephemeral: false });
                 ticketData.closedAt = new Date();
                 ticketData.closedBy = interaction.user.id;
-                ticketData.closedByName = interaction.user.globalName || interaction.user.username;
-                const ownerUser = await client.users.fetch(ticketData.ownerId).catch(() => null);
-                const claimedUser = ticketData.claimedBy ? await client.users.fetch(ticketData.claimedBy).catch(() => null) : null;
-                ticketData.ownerName = ownerUser?.globalName || ownerUser?.username || ticketData.ownerId;
-                ticketData.claimedByName = claimedUser?.globalName || claimedUser?.username || ticketData.claimedByName || '';
-                const transcriptResult = await archiveTicketTranscript(ticketData, interaction.channel);
-                if (!transcriptResult.ok) {
-                    return interaction.editReply({ content: 'تعذر حفظ محتوى التكت، لذلك لم يتم حذف القناة. حاول مرة أخرى.' });
-                }
                 await ticketData.save();
-
-                const publicBaseUrl = (process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
-                const summaryEmbed = new EmbedBuilder()
-                    .setColor(0xd4af37)
-                    .setTitle('ملخص التكت المغلق')
-                    .setDescription(`تم إغلاق التكت **${interaction.channel.name}** بنجاح.`)
-                    .addFields(
-                        { name: 'صاحب التكت', value: `<@${ticketData.ownerId}>`, inline: true },
-                        { name: 'مستلم التكت', value: ticketData.claimedBy ? `<@${ticketData.claimedBy}>` : 'لم يتم استلامه', inline: true },
-                        { name: 'أغلق التكت', value: `<@${ticketData.closedBy}>`, inline: true },
-                        { name: 'وقت فتح التكت', value: formatTicketDate(ticketData.openedAt), inline: true },
-                        { name: 'وقت استلام التكت', value: ticketData.claimedAt ? formatTicketDate(ticketData.claimedAt) : 'لم يتم الاستلام', inline: true },
-                        { name: 'وقت الإغلاق', value: formatTicketDate(ticketData.closedAt), inline: true },
-                        { name: 'نوع التكت', value: ticketData.ticketType || 'تذكرة دعم', inline: true },
-                        { name: 'الطلب أو الاستفسار', value: String(ticketData.request || '—').slice(0, 1024) },
-                        { name: 'الكريديت', value: String(ticketData.credits || '—'), inline: true }
-                    )
-                    .setFooter({ text: 'VORTEX Tickets · تم حفظ محتوى التكت' })
-                    .setTimestamp(ticketData.closedAt);
-
-                const dmPayload = { embeds: [summaryEmbed] };
-                if (publicBaseUrl) {
-                    dmPayload.components = [new ActionRowBuilder().addComponents(
-                        new ButtonBuilder()
-                            .setLabel('رؤية محتوى التكت')
-                            .setStyle(ButtonStyle.Link)
-                            .setURL(`${publicBaseUrl}/ticket-transcript/${ticketData.transcriptToken}`)
-                    )];
-                }
-                const owner = await client.users.fetch(ticketData.ownerId).catch(() => null);
-                if (owner) await owner.send(dmPayload).catch(err => console.error('[Ticket DM Error]', err.message));
-
-                await interaction.editReply({ content: 'تم حفظ محتوى التكت وإرسال ملخصه لصاحب التكت. سيتم حذف القناة خلال 5 ثوانٍ.' });
+                await interaction.reply({ content: 'سيتم حذف التكت خلال 5 ثوان...', ephemeral: false });
                 setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
                 return;
             }
@@ -3912,103 +2987,6 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         // --- [ Ticket Modals ] ---
-        // --- [ Ticket Sale Completion / Rating ] ---
-        if (interaction.isButton() && interaction.customId === 'ticket_complete_sale') {
-            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
-            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
-            const isAdmin = Boolean(ticketData.adminRole && interaction.member.roles.cache.has(ticketData.adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
-            if (!isAdmin) return interaction.reply({ content: 'هذا الإجراء مخصص للإدارة فقط.', ephemeral: true });
-
-            const stars = new ActionRowBuilder().addComponents([1, 2, 3, 4, 5].map(n => new ButtonBuilder()
-                .setCustomId(`ticket_rating:${n}`)
-                .setLabel(`${'★'.repeat(n)}${'☆'.repeat(5 - n)}`)
-                .setStyle(ButtonStyle.Secondary)));
-            return interaction.reply({
-                embeds: [new EmbedBuilder().setColor(0x808080).setTitle('تقييم عملية البيع').setDescription('يرجى من صاحب التكت اختيار تقييم العملية من خلال النجوم.')],
-                components: [stars]
-            });
-        }
-
-        if (interaction.isButton() && interaction.customId.startsWith('ticket_rating:')) {
-            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
-            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
-            if (ticketData.ownerId !== interaction.user.id) return interaction.reply({ content: 'التقييم متاح لصاحب التكت فقط.', ephemeral: true });
-            const rating = Number(interaction.customId.split(':')[1]);
-            const modal = new ModalBuilder().setCustomId(`ticket_rating_modal:${rating}`).setTitle('إرسال تقييم عملية البيع');
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('rating_reason').setLabel('لماذا اخترت هذا التقييم؟').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('rating_note').setLabel('ملاحظة').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1000))
-            );
-            return interaction.showModal(modal);
-        }
-
-        if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_rating_modal:')) {
-            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
-            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
-            if (ticketData.ownerId !== interaction.user.id) return interaction.reply({ content: 'التقييم متاح لصاحب التكت فقط.', ephemeral: true });
-            ticketData.rating = Number(interaction.customId.split(':')[1]);
-            ticketData.ratingReason = interaction.fields.getTextInputValue('rating_reason').trim();
-            ticketData.ratingNote = interaction.fields.getTextInputValue('rating_note').trim();
-            await ticketData.save();
-            const saleEmbed = new EmbedBuilder().setColor(0x808080).setTitle('تم استلام تقييم العميل')
-                .setDescription(`العميل: <@${ticketData.ownerId}>\nالتقييم: ${'★'.repeat(ticketData.rating)}${'☆'.repeat(5 - ticketData.rating)}`)
-                .addFields({ name: 'سبب التقييم', value: ticketData.ratingReason || '—' }, { name: 'الملاحظة', value: ticketData.ratingNote || '—' })
-                .setTimestamp();
-            const productRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_product_modal').setLabel('اسم المنتج المباع').setStyle(ButtonStyle.Secondary));
-            const sent = await interaction.channel.send({ embeds: [saleEmbed], components: [productRow] });
-            ticketData.saleMessageId = sent.id;
-            await ticketData.save();
-            return interaction.reply({ content: 'تم إرسال التقييم للإدارة بنجاح.', ephemeral: true });
-        }
-
-        if (interaction.isButton() && interaction.customId === 'ticket_product_modal') {
-            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
-            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
-            const isAdmin = Boolean(ticketData.adminRole && interaction.member.roles.cache.has(ticketData.adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
-            if (!isAdmin) return interaction.reply({ content: 'هذا الإجراء مخصص للإدارة فقط.', ephemeral: true });
-            const modal = new ModalBuilder().setCustomId('ticket_product_submit').setTitle('بيانات المنتج المباع');
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sold_product').setLabel('اسم المنتج المباع').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sold_price').setLabel('سعر المنتج المباع').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100))
-            );
-            return interaction.showModal(modal);
-        }
-
-        if (interaction.isModalSubmit() && interaction.customId === 'ticket_product_submit') {
-            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
-            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
-            const isAdmin = Boolean(ticketData.adminRole && interaction.member.roles.cache.has(ticketData.adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
-            if (!isAdmin) return interaction.reply({ content: 'هذا الإجراء مخصص للإدارة فقط.', ephemeral: true });
-            ticketData.soldProduct = interaction.fields.getTextInputValue('sold_product').trim();
-            ticketData.soldPrice = interaction.fields.getTextInputValue('sold_price').trim();
-            await ticketData.save();
-            const tConfig = await TicketConfig.findOne({ guildId: interaction.guild.id });
-            const evaluationChannel = tConfig?.evaluationChannelId ? await interaction.guild.channels.fetch(tConfig.evaluationChannelId).catch(() => null) : null;
-            if (!evaluationChannel?.isTextBased?.()) return interaction.reply({ content: 'تم حفظ بيانات المنتج، لكن قناة التقييمات غير مضبوطة من الداشبورد.', ephemeral: true });
-            const finalEmbed = new EmbedBuilder().setColor(0x808080).setTitle('تقييم عملية بيع جديدة')
-                .setDescription(`العميل: <@${ticketData.ownerId}>`)
-                .addFields(
-                    { name: 'التقييم', value: `${'★'.repeat(ticketData.rating || 0)}${'☆'.repeat(5 - (ticketData.rating || 0))}`, inline: true },
-                    { name: 'المنتج المباع', value: ticketData.soldProduct || '—', inline: true },
-                    { name: 'السعر', value: ticketData.soldPrice || '—', inline: true },
-                    { name: 'سبب التقييم', value: ticketData.ratingReason || '—' },
-                    { name: 'الملاحظة', value: ticketData.ratingNote || '—' }
-                ).setFooter({ text: `التكت: ${interaction.channel.name}` }).setTimestamp();
-            await evaluationChannel.send({ content: `<@${ticketData.ownerId}>`, embeds: [finalEmbed] });
-            return interaction.reply({ content: 'تم إرسال التقييم وبيانات المنتج إلى قناة التقييمات.', ephemeral: true });
-        }
-
-        if (interaction.isModalSubmit() && interaction.customId === 'ticket_open_modal') {
-            const pendingKey = `${interaction.guild.id}:${interaction.user.id}`;
-            const pending = pendingTicketOpens.get(pendingKey);
-            if (!pending) return interaction.reply({ content: 'انتهت جلسة فتح التكت، اضغط الزر مرة أخرى.', ephemeral: true });
-            pendingTicketOpens.delete(pendingKey);
-            const { ticketType, sectionConfig } = pending;
-            const request = interaction.fields.getTextInputValue('ticket_request').trim();
-            const credits = interaction.fields.getTextInputValue('ticket_credits').trim();
-            return openTicket(interaction, await TicketConfig.findOne({ guildId: interaction.guild.id }), ticketType, sectionConfig, { request, credits });
-        }
-
         if (interaction.isModalSubmit() && (interaction.customId === 'ticket_add_member' || interaction.customId === 'ticket_remove_member')) {
             const memberId = interaction.fields.getTextInputValue('member_id').trim();
             const member = await interaction.guild.members.fetch(memberId).catch(() => null);
@@ -4034,8 +3012,9 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
     const sectionConfig = tConfig.menuOptions?.[optIndex] || {};
     if (sectionConfig.label) ticketType = sectionConfig.label;
 
-            return showTicketOpenModal(interaction, ticketType, sectionConfig);
-        }
+    await openTicket(interaction, tConfig, ticketType, sectionConfig);
+    return;
+}
 
         // --- [ Ticket Buttons ] ---
         if (interaction.isButton() && (interaction.customId === 'open_ticket' || interaction.customId.startsWith('ticket_btn_'))) {
@@ -4049,7 +3028,7 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
                 sectionConfig = tConfig.buttons?.[btnIndex] || {};
                 if (sectionConfig.label) ticketType = sectionConfig.label;
             }
-            return showTicketOpenModal(interaction, ticketType, sectionConfig);
+            await openTicket(interaction, tConfig, ticketType, sectionConfig);
         }
         // --- [ Suggestion Menu ] ---
         if (interaction.isStringSelectMenu() && interaction.customId === 'suggestion_menu') {
@@ -4159,55 +3138,7 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
 // 13. Helper Functions
 // ==========================================
 
-async function showTicketOpenModal(interaction, ticketType, sectionConfig = {}) {
-    pendingTicketOpens.set(`${interaction.guild.id}:${interaction.user.id}`, { ticketType, sectionConfig });
-    const modal = new ModalBuilder().setCustomId('ticket_open_modal').setTitle('فتح تذكرة جديدة');
-    modal.addComponents(
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket_request').setLabel('ما هو طلبك أو استفسارك؟').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1500)),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket_credits').setLabel('كم معك كريديت؟').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100))
-    );
-    return interaction.showModal(modal);
-}
-
-function formatTicketDate(value) {
-    if (!value) return '—';
-    return new Date(value).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-async function archiveTicketTranscript(ticketData, channel) {
-    try {
-        const collected = [];
-        let before;
-        for (let page = 0; page < 100; page++) {
-            const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
-            if (!batch?.size) break;
-            for (const message of batch.values()) {
-                collected.push({
-                    messageId: message.id,
-                    authorId: message.author?.id || '',
-                    authorName: message.author?.username || 'عضو',
-                    authorDisplayName: message.member?.displayName || message.author?.globalName || message.author?.username || 'عضو',
-                    avatarUrl: message.author?.displayAvatarURL?.({ extension: 'png', size: 128 }) || '',
-                    content: String(message.content || '').slice(0, 4000),
-                    createdAt: message.createdAt,
-                    attachments: [...message.attachments.values()].map(file => ({ name: file.name || 'مرفق', url: file.url })),
-                    embeds: message.embeds.map(embed => ({ title: embed.title || '', description: String(embed.description || '').slice(0, 4000), url: embed.url || '', color: embed.hexColor || '' }))
-                });
-            }
-            before = batch.last()?.id;
-            if (!before || batch.size < 100) break;
-        }
-        collected.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-        ticketData.transcriptToken = crypto.randomBytes(24).toString('hex');
-        ticketData.transcriptMessages = collected;
-        return { ok: true, count: collected.length };
-    } catch (error) {
-        console.error('[Ticket Transcript Error]', error);
-        return { ok: false, error };
-    }
-}
-
-async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}, openingData = {}) {
+async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) {
     try {
         const existingTicket = await TicketData.findOne({ guildId: interaction.guild.id, ownerId: interaction.user.id, closedAt: null });
         if (existingTicket) {
@@ -4243,16 +3174,13 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}, 
             ticketType,
             adminRole: sectionConfig.adminRole || '',
             categoryId: sectionConfig.categoryId || '',
-            openedAt: new Date(),
-            request: openingData.request || '',
-            credits: openingData.credits || ''
+            openedAt: new Date()
         });
 
         const files = [];
         const embed = new EmbedBuilder()
             .setTitle(`تكت ${ticketType} | #${ticketCount}`)
-            .setDescription(`مرحباً ${interaction.user}!\n\nالإدارة ستتواصل معك قريباً.`)
-            .addFields({ name: 'الطلب أو الاستفسار', value: openingData.request || '—' }, { name: 'الكريديت', value: openingData.credits || '—', inline: true })
+            .setDescription(`مرحباً ${interaction.user}!\n\nالإدارة ستتواصل معك قريباً. يرجى شرح مشكلتك بالتفصيل.`)
             .setColor(0xd4af37)
             .addFields(
                 { name: 'صاحب التكت', value: `${interaction.user}`, inline: true },
@@ -4260,7 +3188,7 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}, 
             )
             .setThumbnail(interaction.user.displayAvatarURL())
             .setTimestamp()
-            .setFooter({ text: 'VORTEX  - Tickets' });
+            .setFooter({ text: 'Drayz System  - Tickets' });
 
         if (tConfig.topImagePath && fs.existsSync(tConfig.topImagePath)) {
             const topName = path.basename(tConfig.topImagePath);
@@ -4278,7 +3206,6 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}, 
             .setPlaceholder('لوحة التحكم بالتكت')
             .addOptions([
                 { label: 'استلام التكت', value: 'claim_ticket', description: 'استلام التكت للمعالجة' },
-                { label: 'إتمام عملية البيع', value: 'complete_sale', description: 'بدء التقييم وإتمام بيانات البيع' },
                 { label: 'اغلاق التكت', value: 'close_ticket', description: 'اغلاق وحذف التكت' },
                 { label: 'اضافة شخص', value: 'add_member', description: 'اضافة شخص للتكت' },
                 { label: 'ازالة شخص', value: 'remove_member', description: 'ازالة شخص من التكت' },
@@ -4319,7 +3246,7 @@ async function fetchKickChannel(username) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
-        const headers = { Accept: 'application/json', 'User-Agent': 'VORTEX-Bot/2.0' };
+        const headers = { Accept: 'application/json', 'User-Agent': 'Drayz System-Bot/2.0' };
         for (const version of ['v2', 'v1']) {
             const response = await fetch(`https://kick.com/api/${version}/channels/${encodeURIComponent(username)}`, {
                 headers, signal: controller.signal
@@ -4461,338 +3388,6 @@ const categorySlug = categorySource?.slug || null;
 }
 
 setInterval(checkKickLive, Number(process.env.KICK_CHECK_INTERVAL_MS || 30000));
-
-// ==========================================
-// 14.5 Iraqi Poetry System (شعر عراقي دوري)
-// ==========================================
-
-const Poem = mongoose.model('Poem', new mongoose.Schema({
-    text: { type: String, required: true, unique: true },
-    meaning: { type: String, default: 'يحچي عن إحساس صادق ومشاعر من القلب.' }
-}));
-
-const PoetryConfig = mongoose.model('PoetryConfig', new mongoose.Schema({
-    guildId: { type: String, required: true, unique: true },
-    enabled: { type: Boolean, default: false },
-    channelId: String,
-    roleId: String,
-    intervalMinutes: { type: Number, default: 2 },
-    lastSentAt: Date,
-    // طابور مخلوط من الـ ObjectId الخاصة بالأبيات المتبقية قبل إعادة التدوير، لضمان عدم تكرار أي بيت قبل ما تخلص كل الأبيات
-    queue: [{ type: mongoose.Schema.Types.ObjectId }]
-}));
-
-// أبيات شعر عراقي قصيرة، من تأليف أصلي بأسلوب الشعر الشعبي العراقي (دارمي/أبوذية/حكم) - مو منسوخة من أي مصدر
-const IRAQI_POEMS_SEED = [
-"يا كل ما جيت أحجيلك تعب اللسان\nوتبقه الروح تدور الك أمان",
-"سؤال الك ياكلبي شنو الدوه\nيريد الصبر ما بيه اشوفه",
-"دربنه طويل وياريت نوصل\nولو تعبت الروح ما ننكسر",
-"الفرگه صعبه بس الذكرى أصعب\nتبقه تدور بيك وياك تهرب",
-"شفتك من بعيد وحسيت گلبي\nيرجف مثل ريشه بيها الهوه",
-"چم مره گلت اسكت وما گدرت\nلأن الحچي يفضح اللي مخبيه",
-"عيوني تدور دربك بكل مكان\nولو غبت ساعة تحسبها زمان",
-"ما اريد غيرك ولا غيرك أريد\nوروحي بيك تحلم وتعيد",
-"صبرت وصبري صار مثل الجبل\nبس گلبي ما زال يحبك ويحل",
-"يا طيرالبيك اطير وياه\nخذ سلامي واحچيله اشتياگه",
-"الدنيه دوارة وحنه بيها ضيوف\nنعيش يومين وناخذ الحلوف",
-"گلبي صغير بس همومه چبار\nيتحمل الجرح وما يبين آثار",
-"مو كل اللي يبتسم يكون مرتاح\nبعضهم يبچي بداخله وياه سلاح",
-"العمر مايوگف على حالة\nيمشي ويمشي وياخذ رجالة",
-"لو تسال الگلب شلون حاله\nيگلك تعبان بس ما يبين حاله",
-"ما يفهم الحزن الا اللي ذاگه\nوما يعرف الفرح الا اللي باگه",
-"صديج زين يسوه ألف قريب\nويبقه وياك بالفرح والنصيب",
-"الصدگ صعب بزمن الكذب سهل\nبس اللي يصدگ يبقه بالمحل",
-"چم ندمت على كلمة گلتها\nوچم فرحت بابتسامة رديتها",
-"الوگت يمشي وما يوگف لحد\nخذ العبرة وسوي الخير وحد",
-"يا ليل طول وخل الهم يفوت\nولا تخليني اعيش بهل السكوت",
-"العتب مو حل والصبر أحسن طريج\nلأن الصبر بالآخر يصير بريج",
-"ما كل من يضحك گلبه مرتاح\nوما كل من يبچي يريد سماح",
-"احبك مثل ما يحب الگمر الليل\nوانته بگلبي مثل ماي السيل",
-"سكتنه سنين وحچينه بساعة\nلأن الشوگ ما يعرف طاعة",
-"يا وطني الغالي وين ما اروح\nگلبي وياك وروحي معك تلوح",
-"الاصل يبين بالمواقف مو بالحچي\nواللي اصله زين يبين بلا شي",
-"چان الفراگ صعب واليوم اصعب\nبس الأمل يبقه وما ينهزم",
-"من كثر ما تعبت ما بقه ادعي\nبس اني اعرف الرب يسمعني",
-"يا ايام مرت شگد كانت حلوة\nوليتها ترجع ولو ساعة وحدة",
-"الوفه صار غالي والناس تغيرت\nبس گلبي الطيب ما زال ثابت",
-"العين تشوف والگلب يحس\nوالروح تعرف اللي بيها امس",
-"مو عيب تبچي إذا الجرح وجعك\nالعيب تخفي وتخلي الهم ياكلك",
-"يا نجمة بالسمه شفتيه وين راح\nخبريه اني لهسه بعده ما ارتاح",
-"دنيه غدارة وناسها تتغير\nبس روحي الطيبة ما راح تتغير",
-"چم درب مشيته لحد ما وصلت\nوچم مرة تعبت وچم مرة ابتسمت",
-"احچيلك عن گلبي وشلون تعب\nوانته السبب باللي صاير وسبب",
-"العمر گصير والدنيه فانية\nخل نعيش بالخير ونترك امانة",
-"يا حبيبي البعد صعب ونار\nبس گلبي بيك يفتخر ويفتخر",
-"الصبر مفتاح الفرج يا اخوان\nولو طال الليل لازم يجي الاذان",
-"ما ننسه اللي وقف وياي بضيقي\nولا ننسه اللي زرع الشوگ بطريقي",
-"يا حظي العاثر ليش دايم تلعب\nخليني مرة اضحك بلا تعب",
-"الگلب يعشگ والعين تدمع\nوالروح تحن للي ما ترجع",
-"عيني تدور وجهك بكل زحمة\nوالگلب يحسب ثانية سنة",
-"يا ريتني طير اطير وياك\nواحط براس التل واحچيلك احچاياك",
-"مثل شمعة تحترگ وتنور غيرها\nهيچي الطيب يفنى ويبقه ذكرها",
-"البعد قاسي والوصل احلى امنية\nوگلبي دايم يحلم بيك ثانية",
-"لا تلوم گلبي إذا حن لأصله\nفكل شي براسه يرجع لأهله",
-"يا ورده حمره شبيهه خدك\nوريحتك بالگلب ما تفارگ عندك",
-"العمر مثل الماي يمشي وما يرجع\nخل نغتنم كل يوم قبل ما يوجع",
-"صرت اتعلم من جروحي دروس\nواعرف مين الصادگ ومين الفلوس",
-"يا صاحبي الزين وين ما تروح\nذكرك بگلبي ما يفارگ ولا يروح",
-"الگربه صعبة والوطن بالگلب\nولو غبنه سنين نرجع بلا حسب",
-"چم مرة گلت راح انسه واعيش\nبس گلبي يرجع ليك بلا تفتيش",
-"يا شمعة العمر ليش تنطفي بسرعة\nخلي ضويچ يبقه بالگلب دفعة",
-"الحچي يبين شنو نوع الانسان\nوالصمت احيان يحچي اكثر من لسان",
-"يا غايب عن عيني حاضر بروحي\nما ينسه گلبي غيابك يا نوحي",
-"العتب صار موده بزمن الغربه\nوالصبر صار زاد يا هل التربة",
-"شگد صعب اضحك وگلبي مكسور\nبس الحياة تفرض هل الشعور",
-"يا ريت الزمن يرجع الينه ايام\nنعيشها من جديد بلا ازعاج والام",
-"الصدگ يبقه ولو مر الزمان\nوالكذب ينكشف ولو طال الأمان",
-"گلبي تعلم يصبر على الجراح\nويحاول دايما يلگه طريج الفلاح",
-"يا ابو العيون السود شفتك وهويت\nوانسه العالم كله وياك سبيت",
-"الدرب طويل والزاد گليل\nبس العزيمة توصلنه بالتفصيل",
-"يا حزن گلبي متى بتروح وتخلص\nتعبت اتحمل وابچي واتنفس",
-"الاصدقاء بوگت الضيگ يبينون\nواللي يصبرون وياك هم الطيبون",
-"يا ليل خذني بعيد عن همومي\nوردني اطفل العب بايامي",
-"العشگ صعب لو صادگ ونظيف\nويصير سهل لو كان زيف وخفيف",
-"چم حاولت انسه وچم فشلت\nلأن الذكرى بگلبي ما اندفنت",
-"يا وردة الصبر تفتحي بروحي\nوخليني اتحمل واقاوم جروحي",
-"الگلب لو صافي يشوف الصفه\nوالعين الحسودة ما تشوف الا العله",
-"يا نسمة الصبح خذي سلامي\nوصليه لحبيبي بعيد امامي",
-"العمر فرصة وحدة وما ترجع\nخل نعيشها بمعنه وما نضيع",
-"چم مره سامحت وچم مره جرحوني\nبس گلبي الطيب دايم يرجع لهوني",
-"يا اهل الطيبة الله يخليكم\nوياريت دايما الخير يوصلكم",
-"الصبر مو ضعف الصبر قوة\nواللي يصبر بالنهاية يلگه الحلوة",
-"يا نجمة تلمعين وسط الظلام\nكوني دليلي واهديني للسلام",
-"العتاب بين الحبايب دليل شوگ\nوالسكوت بينهم اصعب من الفراگ",
-"چم درب سلكته لحد ما لگيتك\nوچم ليلة سهرت وانه اتذكرك",
-"يا ابو الگلب الطيب زادك الله خير\nوخلا ربي يحفظك من كل شر",
-"العين لما تدمع تفضح گلب حزين\nوالابتسامة احيانا تخفي جرح دفين",
-"يا وطن الاجداد كل الگلب اليك\nولو بعدت اجسادنه ارواحنه اليك",
-"الصبر مفتاح والدعه سلاح\nوالله كريم يبدل الضيگ فلاح",
-"يا صديج العمر شكراً على وفاك\nوعلى وگفتك وياي بايام شگاك",
-"العمر دقايق تعدي وما ترجع\nخل كل دقيقة نعيشها ما تضيع",
-"چم مره حاولت اداري دمعتي\nبس الحزن يبين ولو خفيت غصتي",
-"يا رب فرجها على كل مهموم\nواسترها على كل مذنوب ومظلوم",
-"الحياة درس وكل يوم فصل جديد\nنتعلم ونغلط ونحاول نعيد",
-"يا حمامة السطح غنيلي شوية\nخفف عني الهم بهل العشية",
-"العتب الك يا زمن ليش تدور\nوتاخذ الطيبين وتخلي الشرور",
-"چم شخص مر بحياتي وترك اثر\nوچم شخص نسيته بلمح البصر",
-"يا اهل الگلوب الصافية دوموا هيچي\nلأن الدنيه تحتاج قلوب نظيفة",
-"الفرح لو صادگ ينور الوجه\nوالحزن لو ثگيل يبين بلا لبس",
-"يا نور عيني وين ما تكون تنور\nودربك بگلبي محفور ومسطور",
-"العمر مثل الكتاب كل يوم صفحة\nنكتبها احنه ونعيش القصة",
-"چم مرة ضحكت وگلبي يبچي بداخل\nوچم مرة صبرت والصبر بيه فاصل",
-"يا ابو الخلگ الزين تسلم يمينك\nوربي يديم عليك الخير ويحفظك",
-"الصدگ نور ولو كان مر\nوالكذب ظلام ولو زين المظهر",
-"يا صوت الاذان يريح گلوبنه\nويذكرنه بربنه وبديننه",
-"العتاب حلو لو كان بين الاحباب\nويصير مر لو زاد عن الاسباب",
-"چم ليلة سهرت اداري همومي\nوچم صباح ابتسمت رغم جروحي",
-"يا اهل الوفه دوموا الينه سند\nوخلوا المحبة تجمعنه للأبد",
-"العمر لو طال او گصر لازم ينتهي\nخل نسوي الخير قبل لا ينتهي",
-"يا شمس الصبح طلعي بهاء\nوخلي النور يمحي كل ظلماء",
-"الگلب الطيب ما يحمل حقد\nويسامح ويصفح ويبقه بالود",
-"چم مرة گلت هذا اخر العنه\nوچم مرة رجعت نفس المكان",
-"يا نسيم الفجر خذني بعيد\nوردني اعيش يوم زين وسعيد",
-"العمر رحلة والزاد الايمان\nوالصبر رفيگ يوصلنه للأمان",
-"يا صديگ الدرب شكرا لوجودك\nوعلى المحبة اللي دايم بعهودك",
-"الحزن يمر مثل ما تمر الغيمة\nوبعده تطلع شمس الفرح بحكمة",
-"چم مره سالت الگمر عنك يريد\nوچم مره حچيت الريح بلا ما تعيد",
-"يا اهل البيت العتيگ ذكراكم تعيش\nوگلوبنه بيها الحنين ما يطيش",
-"العمر گصير والدنيه ما تدوم\nخل نعيش بمحبة وناخذ عبر ونهوم",
-"يا طير الحمام غني للمحبين\nوخبرهم اننه دايما ذاكرين",
-"الصبر تاج ما يلبسه الا الكرام\nواللي يصبر ينال في الاخر مقام",
-"چم درب صعب مشيته لحد النور\nوچم مرة كنت اظن اني مقهور",
-"يا اهل الطيبة نورو دربنه\nوخلو المحبة تسود بيننه",
-"العتب على الزمن مو على الناس\nلأن الزمن هو اللي يغير الاحساس",
-"يا صوت الگيثارة عزف الأسى\nخل الالحان توصف اللي جرى",
-"الگلب الجريح يشفى بوگتها\nويرجع يحب ويعيش فرحتها",
-"چم مرة ندمت وچم مرة سامحت\nوچم مرة بالصمت گلبي تكلم وباح",
-"يا اهل الاصالة انتم زين الديار\nوبيكم نفتخر ونعيش بكل فخار",
-"العمر لحظات تعدي وتنمحي\nخل كل لحظة نعيشها بمعنى وحي",
-"يا ابو الطيبة يخليك الله لينه\nونورك يبقه دايم يهدينه",
-"الصدگ بالحچي يبين الرجال\nوالكذب يفضح صاحبه بلا سؤال",
-"چم مرة تعبت وچم مرة ارتحت\nوچم مرة بعد الظلام النور لمحت",
-"يا نجوم الليل شهدوا على شوگي\nوعلى صبري وعلى طول طريگي",
-"العمر امانة والوگت يمشي بسرعة\nخل نسوي فيه اللي يفرح وينفعنه",
-"يا صديگ الطفولة وين ما تكون\nذكرياتنه بگلبي ما تهون",
-"الفرح الحقيقي يجي من گلب صافي\nوما يشترى بمال ولا بفلوس وافي",
-"چم حلم حلمته وچم حلم تحقق\nوچم مرة بالصبر طريگي انفتح",
-"يا اهل الگرية الطيبة عادت الينه ذكرى\nوگلبي بيها يحن وياخذ صورة",
-"العمر مدرسة نتعلم منها كل يوم\nونحاول نصلح اخطانه ونقوم",
-"يا شمس المغيب ودعي بهدوء\nوخلي غدنه يجي احلى وانقى",
-"الصبر على البلوى فرج قريب\nوالله كريم مايخلي عبده بلا نصيب",
-"چم صديج صدگ وچم صديج خان\nوگلبي مايزال يثق ومايهان",
-"يا اهل المحبة دوموا كل هالطيب\nوخلو الگلوب تلتگي بلا عيب",
-"العمر كتاب وكل صفحة درس\nنتعلم منها ونمشي بلا وسواس",
-"يا طير مسافر خذ اشواگي وياك\nوردهن الحبيب اللي دايم بباله",
-"الگلب الوفي ما ينسه اهله\nولو بعدت المسافة يبقه فيهم امله",
-"چم مرة بچيت من الفرح لا من الحزن\nوچم مرة ضحكت وگلبي بيه شجن",
-"يا اهل الصبر ربي وياكم دايما\nويجزيكم خير على كل ما تحملتوا",
-"العمر لو طال يبقه ذكرى حلوة\nولو گصر يبقه بگلوبنه صورة",
-"يا نسيم الليل بلغ سلامي\nلكل حبيب بعيد عن مكاني",
-"الصدگ سلاح ولو كان صعب حمله\nوالكذب راحة موقتة وبعدها ذله",
-"چم درب مشيته وچم درب بقه\nوگلبي دايم يدور طريگ الحق",
-"يا اهل الوفه انتم زين الزمان\nوبيكم نفتخر بكل مكان",
-"العمر رحلة قصيرة بس عميقة\nنعيشها بمحبة ونخلي الذكرى رقيقة"
-];
-
-// إضافات مولّدة من تراكيب أصلية باللهجة العراقية حتى يصير العدد قريب من 400 بيت.
-// كل بيت ينحفظ ويّاه معنى واضح، والأبيات تبقى بدون تكرار.
-const GENERATED_IRAQI_POEMS = [
-    ['يا گلبي لا تگدر على كل فرگه', 'تره بعد العسر تضحكلك الدنيا', 'المعنى: لا تستسلم للحزن، لأن الفرج يجي بعد التعب.'],
-    ['على طاري الوفه تنذكر الوجوه', 'والطيب يبقى لو تتبدل الأيام', 'المعنى: الإنسان الوفي تبقى قيمته حتى لو تغيّرت الظروف.'],
-    ['هواي ناس مرّت وما خلّت أثر', 'وانت بگلبـي صرت أول وآخر', 'المعنى: بعض الأشخاص يكون حضورهم عابر، بينما الحبيب يترك أثراً عميقاً.'],
-    ['يا ليل خلّي نجومك شاهدات', 'على گلب صابر وما باع الود', 'المعنى: الصبر والوفاء يثبتان صدق المشاعر مهما طال الانتظار.'],
-    ['چنت أظن الجرح يعلّم نسيان', 'طلع يعلّم شلون نختار الناس', 'المعنى: التجارب المؤلمة تعلّمنا التمييز بين الصادق والمزيّف.'],
-    ['من ينكسر خاطر الطيب يهدأ', 'بس تبقى بعيونه سالفة عمر', 'المعنى: الشخص الطيب قد يسكت عن ألمه، لكن أثره يبقى في داخله.'],
-    ['يا صاحبي لا تشيل الهم وحدك', 'تره الرفقة الصدگ تسند جبل', 'المعنى: الصديق الحقيقي يخفف الحمل ويقف معك في الشدائد.'],
-    ['لو ضاگت الدنيا بوجهك يوم', 'افتح باب الدعاء تلقى أمان', 'المعنى: اللجوء إلى الله يمنح القلب طمأنينة وقت الضيق.'],
-    ['الشوگ مو كلمة وتنقال بساعة', 'الشوگ عمر يظل بالروح ساكن', 'المعنى: الاشتياق الحقيقي إحساس طويل يعيش في القلب ولا ينتهي بسرعة.'],
-    ['يا وردة بستاني لا تميلين', 'تره ريحتچ ترد الروح للبيت', 'المعنى: الحضور الجميل يعيد الفرح والدفء إلى المكان والقلب.'],
-    ['ما هزّني حچي الناس لو كثر', 'اللي يعرف أصله ما يلتفت', 'المعنى: صاحب المبدأ لا يتأثر بكلام الناس ما دام يعرف قيمته.'],
-    ['الدرب لو بيه شوك نمشيه', 'المهم آخره يفتح للفرح باب', 'المعنى: الصعوبات تهون عندما يكون الهدف يستحق الوصول.'],
-    ['يا حلم لا تسرع وتتركني وحدي', 'تره من دونك ما يطيب السهر', 'المعنى: الأمل هو الذي يجعل الانتظار والتعب محتملين.'],
-    ['گلبـي تعلّم من سكوتك حچي', 'وصار يفسّر كل نظرة عيون', 'المعنى: المحبة الصادقة تفهم الإشارات حتى من دون كلام.'],
-    ['الما يگدر يحفظ العشرة يوم', 'لا يطلب من گلبك تبقى وياه', 'المعنى: الوفاء مسؤولية، ومن يضيّع العشرة لا يحق له طلب البقاء.'],
-    ['من يزرع الخير بگلوب البشر', 'يحصد محبة لو بعد حين', 'المعنى: المعروف يرجع إلى صاحبه ولو بعد وقت.'],
-    ['يا شمس خلي دفوچ ببيوتنه', 'تره البرد مو بس بالجو يصير', 'المعنى: القسوة قد تكون في المشاعر، والحنان هو الدفء الحقيقي.'],
-    ['الذكرى لو توجع تبقى غالية', 'لأن بيها ضحكة ناس نحبهم', 'المعنى: الذكريات المؤلمة تظل عزيزة لأنها مرتبطة بأشخاص مهمين.'],
-    ['لا تحسب الهدوء ضعف وخوف', 'مرات السكوت أبلغ جواب', 'المعنى: الصمت أحياناً يدل على الحكمة والقوة وليس العجز.'],
-    ['يا وطن يا ريحة أهلنه', 'بكل غربة نرجعلك بالبال', 'المعنى: الوطن يبقى حاضراً في القلب مهما ابتعد الإنسان عنه.']
-]
-for (const [first, second, meaning] of GENERATED_IRAQI_POEMS) {
-    for (const suffix of [
-        'وبعدها يجي الفرج', 'والطيب ما يضيع', 'والأمل يبقى حي', 'والگلب يعرف دربه', 'والعشرة إلها قدر', 'والله يكتب خير',
-        'وما ننحني للضيم', 'والفرحة ترد للدار', 'والصبر يجيب نتيجة', 'والحچي يبقى بميزان',
-        'والنية الطيبة تكفي', 'والبعد ما يطفي الود', 'والذكرى تبقى حلوة', 'والخير يفتح دربه'
-    ]) {
-        IRAQI_POEMS_SEED.push({ text: `${first}\n${second}، ${suffix}`, meaning });
-    }
-}
-
-// تحويل الأبيات القديمة إلى سجلات تحمل معنى، مع إبقاء النصوص كما هي.
-const POEM_MEANINGS = [
-    { words: ['فراگ', 'غياب', 'بعد', 'غايب'], values: ['المعنى: يحچي عن وجع الفراگ والاشتياگ لشخص غالي.', 'المعنى: يصف شلون الغياب يطوّل الوقت ويخلّي الذكرى حاضرة.', 'المعنى: يعبّر عن أمل الوصل رغم قسوة البعد.'] },
-    { words: ['صبر', 'جراح', 'حزن', 'هم', 'دمع'], values: ['المعنى: يعبّر عن تحمل التعب لحد ما يجي الفرج.', 'المعنى: يذكّر أن الجرح يعلّم الإنسان ويقوّي قلبه.', 'المعنى: يحچي عن حزن مخفي وراء السكوت والابتسامة.'] },
-    { words: ['صديج', 'رفيق', 'وفه', 'عشرة'], values: ['المعنى: يمدح الصديق اللي يوقف ويّاك بوقت الضيگ.', 'المعنى: يبيّن أن العشرة الصادقة أغلى من كثرة المعارف.', 'المعنى: يعبّر عن امتنان شخص ما نسى وگفة حبيبه.'] },
-    { words: ['وطن', 'دار', 'گرية', 'بيت', 'أهل'], values: ['المعنى: يعبّر عن حنين الروح للوطن والأهل.', 'المعنى: يبيّن أن الدار تبقى بالگلب حتى لو طال السفر.', 'المعنى: يحچي عن فخر الإنسان بمكانه وذكرياته.'] },
-    { words: ['حب', 'عشگ', 'حبيب', 'شوگ', 'گلبي'], values: ['المعنى: يعبّر عن محبة صادگة ساكنة بالگلب.', 'المعنى: يصف اشتياگ المحب لشخص ما يگدر ينساه.', 'المعنى: يحچي عن أثر الحبيب اللي يبقى بكل تفاصيل اليوم.'] },
-    { words: ['صدق', 'صدگ', 'كذب', 'مواقف', 'أصل'], values: ['المعنى: يوضح أن الصدگ يبان بالمواقف مو بكثرة الحچي.', 'المعنى: يفرّق بين صاحب الأصل وبين الكلام اللي ما وراه فعل.', 'المعنى: يذكّر أن الكذب ينكشف مهما طال الوقت.'] },
-    { words: ['عمر', 'وگت', 'دنيه', 'حياة', 'يوم'], values: ['المعنى: يذكّرنا أن العمر يمشي بسرعة ولازم نغتنم أيامه.', 'المعنى: يحثّ على ترك أثر طيب قبل ما تمر السنين.', 'المعنى: يبيّن أن كل يوم فرصة جديدة للتغيير والفرح.'] }
-];
-function meaningForPoem(text) {
-    const source = String(text || '');
-    const matched = POEM_MEANINGS.find(group => group.words.some(word => source.includes(word)));
-    const values = matched?.values || ['المعنى: يحچي عن إحساس صادق وتجربة من تجارب الحياة.', 'المعنى: يعبّر عن مشاعر وتجربة تركت أثرها بالروح.', 'المعنى: يصف إحساساً عميقاً يمر بيه الإنسان بحياته.'];
-    let hash = 0;
-    for (const char of source) hash = (hash * 31 + char.codePointAt(0)) >>> 0;
-    return values[hash % values.length];
-}
-function resolvedPoemMeaning(poem) {
-    const stored = String(poem?.meaning || '').trim();
-    return !stored || stored === 'يحچي عن إحساس صادق ومشاعر من القلب.' || stored === 'المعنى: يحچي عن إحساس صادق وتجربة من تجارب الحياة.'
-        ? meaningForPoem(poem?.text)
-        : stored;
-}
-const NORMALIZED_POEMS = IRAQI_POEMS_SEED.map(item => typeof item === 'string'
-    ? { text: item, meaning: meaningForPoem(item) }
-    : item
-);
-
-
-async function seedPoemsIfNeeded() {
-    try {
-        const docs = [...new Map(NORMALIZED_POEMS.map(item => [item.text, item])).values()];
-        for (const poem of docs) {
-            await Poem.updateOne({ text: poem.text }, { $setOnInsert: poem, $set: { meaning: poem.meaning } }, { upsert: true }).catch(() => {});
-        }
-        const count = await Poem.countDocuments();
-        console.log(`[Poetry] تم تجهيز ${count} بيت شعر عراقي في قاعدة البيانات.`);
-    } catch (err) {
-        console.error('[Poetry Seed Error]', err.message);
-    }
-}
-
-async function refillPoetryQueue(config, excludeId = null) {
-    const allIds = (await Poem.find({}, { _id: 1 }).lean()).map(p => p._id.toString());
-    if (allIds.length === 0) return [];
-    // خلط عشوائي (Fisher-Yates)
-    for (let i = allIds.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [allIds[i], allIds[j]] = [allIds[j], allIds[i]];
-    }
-    // نتجنب انو نفس البيت الاخير يطلع اول وحدة بالدورة الجديدة إذا العدد يسمح
-    if (excludeId && allIds.length > 1 && allIds[0] === excludeId.toString()) {
-        [allIds[0], allIds[1]] = [allIds[1], allIds[0]];
-    }
-    return allIds;
-}
-
-async function sendPoemToGuild(config) {
-    const guild = client.guilds.cache.get(config.guildId);
-    if (!guild) return;
-    const channel = guild.channels.cache.get(config.channelId) || await guild.channels.fetch(config.channelId).catch(() => null);
-    if (!channel?.isTextBased?.()) return;
-
-    let queue = Array.isArray(config.queue) ? [...config.queue] : [];
-    if (queue.length === 0) {
-        queue = await refillPoetryQueue(config);
-        if (queue.length === 0) return; // لا يوجد أي شعر بقاعدة البيانات
-    }
-
-    const nextId = queue.shift();
-    const poem = await Poem.findById(nextId).catch(() => null);
-
-    config.queue = queue;
-    config.lastSentAt = new Date();
-    await config.save().catch(() => {});
-
-    if (!poem) return; // البيت انحذف بينهم، الدورة الجاية بتصلحها
-
-    const guildConfig = await GuildConfig.findOne({ guildId: guild.id }).lean().catch(() => null);
-    const bannerURL = guildConfig?.welcome?.bannerURL;
-    const actualMeaning = resolvedPoemMeaning(poem);
-    if (poem.meaning !== actualMeaning) {
-        await Poem.updateOne({ _id: poem._id }, { $set: { meaning: actualMeaning } }).catch(() => {});
-    }
-    const embed = new EmbedBuilder()
-        .setTitle('بيت شعر عراقي')
-        .setDescription(`**${String(poem.text).replace(/\n/g, '\n')}**`)
-        .addFields(
-            { name: 'ــــــــــــــــــــــــــــ', value: 'ــــــــــــــــــــــــــــ', inline: false },
-            { name: 'المعنى', value: actualMeaning, inline: false }
-        )
-        .setColor(0xff0000)
-        .setFooter({ text: 'VORTEX - الشعر العراقي' })
-        .setTimestamp();
-    if (bannerURL) embed.setImage(bannerURL);
-
-    const mention = config.roleId ? `<@&${config.roleId}>` : undefined;
-    await channel.send({ content: mention, embeds: [embed], allowedMentions: config.roleId ? { roles: [config.roleId] } : undefined }).catch(e => console.error('[Poetry Send Error]', e.message));
-}
-
-let poetryCheckRunning = false;
-async function checkPoetrySchedules() {
-    if (poetryCheckRunning) return;
-    poetryCheckRunning = true;
-    try {
-        const configs = await PoetryConfig.find({ enabled: true, channelId: { $exists: true, $ne: '' } });
-        const now = Date.now();
-        for (const config of configs) {
-            const intervalMs = Math.max(1, config.intervalMinutes || 2) * 60 * 1000;
-            const last = config.lastSentAt ? new Date(config.lastSentAt).getTime() : 0;
-            if (now - last >= intervalMs) {
-                await sendPoemToGuild(config);
-            }
-        }
-    } catch (err) {
-        console.error('[Poetry Scheduler Error]', err.message);
-    } finally {
-        poetryCheckRunning = false;
-    }
-}
-
-// نفحص كل 20 ثانية بس الإرسال الفعلي يصير بس إذا وصل وگت العدّاد الخاص بكل سيرفر (intervalMinutes)
-setInterval(checkPoetrySchedules, 20 * 1000);
-
 
 // ==========================================
 // 15. Slash Commands Registration
@@ -4977,7 +3572,7 @@ async function registerSlashCommands() {
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     try {
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        console.log('[VORTEX ] Slash commands registered.');
+        console.log('[Drayz System ] Slash commands registered.');
     } catch (err) {
         console.error('[Slash Register Error]', err);
     }
@@ -4988,31 +3583,15 @@ async function registerSlashCommands() {
 // ==========================================
 
 client.once('ready', async () => {
-    console.log(`[VORTEX ] Bot is online as ${client.user.tag}`);
+    console.log(`[Drayz System ] Bot is online as ${client.user.tag}`);
     client.user.setPresence({
-        activities: [{ name: 'VORTEX ', type: ActivityType.Watching }],
+        activities: [{ name: 'Drayz System ', type: ActivityType.Watching }],
         status: 'online'
     });
 
-    // استئناف السجون المنتهية
-    try {
-        const now = new Date();
-        const expiredJails = await JailData.find({ endAt: { $lte: now } });
-        for (const jailEntry of expiredJails) {
-            const guild = client.guilds.cache.get(jailEntry.guildId);
-            if (!guild) continue;
-            const member = await guild.members.fetch(jailEntry.userId).catch(() => null);
-            if (member) await handleUnjail(member, jailEntry.guildId);
-        }
-    } catch (err) {
-        console.error('[Jail Resume Error]', err);
-    }
-
     for (const guild of client.guilds.cache.values()) await fetchGuildInvites(guild);
     await registerSlashCommands();
-    await seedPoemsIfNeeded();
     checkKickLive();
-    checkPoetrySchedules();
 });
 
 // ==========================================
@@ -5021,37 +3600,10 @@ client.once('ready', async () => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`[VORTEX ] Dashboard running on port ${PORT}`);
-});
-
-// Express error middleware must be registered after all routes.
-app.use((err, req, res, next) => {
-    logError('Express route/middleware', err, {
-        method: req.method,
-        path: req.originalUrl,
-        ip: req.ip
-    });
-    if (res.headersSent) return next(err);
-    return res.status(500).send('Internal Server Error. Check Render logs.');
-});
-
-process.on('uncaughtException', error => {
-    logError('uncaughtException', error);
-});
-
-process.on('unhandledRejection', reason => {
-    logError('unhandledRejection', reason instanceof Error ? reason : new Error(String(reason)));
-});
-
-process.on('warning', warning => {
-    console.warn('[PROCESS WARNING]', JSON.stringify({
-        name: warning.name,
-        message: warning.message,
-        stack: redactSecrets(warning.stack)
-    }, null, 2));
+    console.log(`[Drayz System ] Dashboard running on port ${PORT}`);
 });
 
 client.login(process.env.TOKEN).catch(err => {
-    logError('Discord bot login', err);
+    console.error('[Drayz System ] Login failed:', err);
     process.exit(1);
 });
