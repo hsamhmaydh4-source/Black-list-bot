@@ -698,13 +698,6 @@ const checkAuth = (req, res, next) => {
     res.redirect('/login');
 };
 
-const checkDashboardOwner = (req, res, next) => {
-    const ownerId = String(process.env.DASHBOARD_OWNER_ID || '').trim();
-    if (!ownerId) return res.status(500).send('DASHBOARD_OWNER_ID غير مضبوط في متغيرات البيئة.');
-    if (String(req.user?.id || '') !== ownerId) return res.status(403).send('هذا الحساب غير مخول لدخول لوحة التحكم.');
-    next();
-};
-
 const checkBotGuildAccess = (req, res, next) => {
     if (!client.guilds.cache.has(req.params.guildId)) return res.status(404).send('البوت غير موجود في هذا السيرفر.');
     next();
@@ -721,11 +714,10 @@ const checkGuildAccess = (req, res, next) => {
     next();
 };
 
-// The dashboard owner may view and configure every guild where the bot is present.
-// Discord permissions are still checked separately before each bot action.
-app.use('/manage/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/save/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
-app.use('/delete-kick/:guildId', checkAuth, checkDashboardOwner, checkBotGuildAccess);
+// Any authenticated Discord user may access the dashboard for guilds where the bot is present.
+app.use('/manage/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/save/:guildId', checkAuth, checkBotGuildAccess);
+app.use('/delete-kick/:guildId', checkAuth, checkBotGuildAccess);
 
 app.get('/auth/discord', passport.authenticate('discord'));
 app.get('/callback', (req, res, next) => {
@@ -1972,7 +1964,7 @@ app.get('/manage/:guildId/notificationroles', checkAuth, async (req, res) => {
           <div style="display:grid;grid-template-columns:1.5fr 1.5fr .7fr;gap:10px;margin-bottom:10px;align-items:center">
             <select name="notify_role_${i}"><option value="">-- اختر رتبة --</option>${roles.map(r => `<option value="${r.id}" ${item.roleId===r.id?'selected':''}>${r.name}</option>`).join('')}</select>
             <input name="notify_label_${i}" value="${String(item.label||'').replace(/&/g,'&amp;').replace(/\"/g,'&quot;').replace(/</g,'&lt;')}" placeholder="اسم العرض ${i+1}" maxlength="100">
-            <input name="notify_emoji_${i}" value="${String(item.emoji||'').replace(/&/g,'&amp;').replace(/\"/g,'&quot;').replace(/</g,'&lt;')}" placeholder="إيموجي">
+            <input name="notify_emoji_${i}" value="${String(item.emoji||'').replace(/&/g,'&amp;').replace(/\"/g,'&quot;').replace(/</g,'&lt;')}" placeholder="إيموجي عادي أو ID إيموجي السيرفر">
           </div>`; }).join('')}
         </div>
         <button class="btn-save" style="margin-top:12px">حفظ وإرسال اللوحة</button>
@@ -1996,9 +1988,21 @@ app.post('/save/:guildId/notificationroles', checkAuth, upload.single('notifyIma
     await GuildConfig.findOneAndUpdate({ guildId }, { $set: { notificationRoles: { imagePath, channelIds, roles } } }, { upsert: true, new: true });
     const guild = client.guilds.cache.get(guildId);
     if (guild && roles.length) {
-        const options = roles.map(r => ({ label: r.label, value: r.roleId, ...(r.emoji ? { emoji: r.emoji } : {}) }));
-        const select = new StringSelectMenuBuilder().setCustomId('notification_roles_menu').setPlaceholder('اختر رتبتك').addOptions(options);
-        const reset = new ButtonBuilder().setCustomId('notification_roles_reset').setLabel('ريست منيو').setStyle(ButtonStyle.Secondary);
+        const options = roles.map(r => {
+            const option = { label: r.label, value: r.roleId };
+            if (r.emoji) {
+                const emojiId = r.emoji.match(/\d{15,}/)?.[0];
+                if (emojiId) {
+                    const customEmoji = guild.emojis.cache.get(emojiId);
+                    if (customEmoji) option.emoji = { id: customEmoji.id, name: customEmoji.name, animated: customEmoji.animated };
+                } else {
+                    option.emoji = { name: r.emoji };
+                }
+            }
+            return option;
+        });
+        options.push({ label: 'ريست منيو', value: '__reset_menu__', description: 'إعادة ضبط القائمة فقط' });
+        const select = new StringSelectMenuBuilder().setCustomId('notification_roles_menu').setPlaceholder('اختر رتبتك أو ريست منيو').addOptions(options);
         const embed = new EmbedBuilder().setColor(0xd4af37).setTitle('رتب الإشعارات').setDescription('اختر الرتبة التي تريد الحصول عليها من القائمة أدناه.');
         const guildIcon = guild.iconURL({ size: 128 });
         if (guildIcon) embed.setThumbnail(guildIcon);
@@ -2010,7 +2014,7 @@ app.post('/save/:guildId/notificationroles', checkAuth, upload.single('notifyIma
         }
         for (const channelId of channelIds) {
             const channel = guild.channels.cache.get(channelId);
-            if (channel?.isTextBased?.()) await channel.send({ embeds: [embed], files, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(reset)] }).catch(err => console.error('[Notification Roles Send Error]', err.message));
+            if (channel?.isTextBased?.()) await channel.send({ embeds: [embed], files, components: [new ActionRowBuilder().addComponents(select)] }).catch(err => console.error('[Notification Roles Send Error]', err.message));
         }
     }
     res.redirect(`/manage/${guildId}/notificationroles`);
@@ -3748,6 +3752,7 @@ client.on('interactionCreate', async (interaction) => {
         }
         if (interaction.isStringSelectMenu() && interaction.customId === 'notification_roles_menu') {
             const roleId = interaction.values[0];
+            if (roleId === '__reset_menu__') return interaction.reply({ content: 'تم ترسيت المنيو', ephemeral: true });
             const settings = await GuildConfig.findOne({ guildId: interaction.guild.id }).lean();
             const roleConfig = settings?.notificationRoles?.roles?.find(r => r.roleId === roleId);
             const role = interaction.guild.roles.cache.get(roleId);
