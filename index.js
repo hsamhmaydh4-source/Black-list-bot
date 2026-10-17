@@ -942,7 +942,7 @@ app.post('/save/:guildId/admincmds', checkAuth, async (req, res) => {
 // ==========================================
 
 // --- [ Dashboard - Server List ] ---
-app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
+app.get('/dashboard', checkAuth, (req, res) => {
     const botGuilds = [...client.guilds.cache.values()];
     const cards = botGuilds.map(g => {
         const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
@@ -1364,7 +1364,7 @@ app.get('/manage/:guildId/welcome', checkAuth, async (req, res) => {
     res.send(ui(g, 'welcome', content));
 });
 
-app.post('/generate/:guildId/welcome-random', checkAuth, checkDashboardOwner, checkBotGuildAccess, async (req, res) => {
+app.post('/generate/:guildId/welcome-random', checkAuth, checkBotGuildAccess, async (req, res) => {
     try {
         const filename = `welcome-generated-${req.params.guildId}-${Date.now()}-${Math.floor(Math.random() * 100000)}.png`;
         const absolutePath = path.join(__dirname, 'uploads', filename);
