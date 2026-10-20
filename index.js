@@ -1888,8 +1888,8 @@ app.get('/manage/:guildId/tickets', checkAuth, async (req, res) => {
 
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:16px;">
                 <div>
-                    <div style="color:var(--gold); font-size:13px; font-weight:700; margin-bottom:10px;">الازرار (حتى 4)</div>
-                    ${[0,1,2,3].map(i => `
+                    <div style="color:var(--gold); font-size:13px; font-weight:700; margin-bottom:10px;">الازرار (حتى 6)</div>
+                    ${[0,1,2,3,4,5].map(i => `
                     <div style="display:grid; grid-template-columns:2fr 1fr; gap:8px; margin-bottom:8px;">
                         <input name="btn_label_${i}" value="${escapeHtml(s.buttons?.[i]?.label || '')}" placeholder="نص الزر ${i+1}">
                         <input name="btn_emoji_${i}" value="${escapeHtml(s.buttons?.[i]?.emoji || '')}" placeholder="ID الإيموجي">
@@ -1898,8 +1898,8 @@ app.get('/manage/:guildId/tickets', checkAuth, async (req, res) => {
                     </div>`).join('')}
                 </div>
                 <div>
-                    <div style="color:var(--gold); font-size:13px; font-weight:700; margin-bottom:10px;">خيارات المنيو (حتى 4)</div>
-                    ${[0,1,2,3].map(i => `
+                    <div style="color:var(--gold); font-size:13px; font-weight:700; margin-bottom:10px;">خيارات المنيو (حتى 6)</div>
+                    ${[0,1,2,3,4,5].map(i => `
                     <div style="display:grid; grid-template-columns:2fr 1fr; gap:8px; margin-bottom:8px;">
                         <input name="menu_label_${i}" value="${escapeHtml(s.menuOptions?.[i]?.label || '')}" placeholder="خيار ${i+1}">
                         <input name="menu_emoji_${i}" value="${escapeHtml(s.menuOptions?.[i]?.emoji || '')}" placeholder="ID الإيموجي">
@@ -1934,7 +1934,7 @@ app.post('/save/:guildId/tickets', checkAuth, upload.fields([{ name: 'topImage' 
         const title = String(b.title || 'نظام التذاكر').trim().slice(0, 256);
         const description = String(b.description || 'اضغط لفتح تذكرة دعم.').trim().slice(0, 4000);
         const buttons = [], menuOptions = [];
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < 6; i++) {
             const btnLabel = String(b[`btn_label_${i}`] || '').trim().slice(0, 80);
             const btnEmoji = String(b[`btn_emoji_${i}`] || '').trim().slice(0, 100);
             const btnRole = String(b[`btn_role_${i}`] || '');
@@ -1994,13 +1994,16 @@ app.post('/save/:guildId/tickets', checkAuth, upload.fields([{ name: 'topImage' 
             }
             const components = [];
             if (config.buttons?.length) {
-                const row = new ActionRowBuilder();
+                const buttonRows = [];
                 config.buttons.forEach((btn, i) => {
-                    const button = new ButtonBuilder().setCustomId(`ticket_btn_${i}`).setLabel(String(btn.label || '').slice(0, 80)).setStyle(ButtonStyle.Primary);
+                    if (!btn.label) return;
+                    const button = new ButtonBuilder().setCustomId(`ticket_btn_${i}`).setLabel(String(btn.label).slice(0, 80)).setStyle(ButtonStyle.Primary);
                     if (btn.emoji) { try { button.setEmoji(/^\d+$/.test(btn.emoji) ? { id: btn.emoji } : btn.emoji); } catch {} }
-                    row.addComponents(button);
+                    const rowIndex = Math.floor(buttonRows.reduce((count, row) => count + row.length, 0) / 5);
+                    if (!buttonRows[rowIndex]) buttonRows[rowIndex] = [];
+                    buttonRows[rowIndex].push(button);
                 });
-                components.push(row);
+                buttonRows.forEach(row => components.push(new ActionRowBuilder().addComponents(row)));
             }
             if (config.menuOptions?.length) {
                 const menu = new StringSelectMenuBuilder().setCustomId('ticket_menu').setPlaceholder('اختر نوع التذكرة...');
@@ -2497,17 +2500,19 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
 
         const components = [];
         if (Array.isArray(tConfig.buttons) && tConfig.buttons.length > 0) {
-            const btnRow = new ActionRowBuilder();
+            const buttonRows = [];
             tConfig.buttons.forEach((btn, i) => {
                 if (!btn.label) return;
-                const button = new ButtonBuilder().setCustomId(`ticket_btn_${i}`).setLabel(String(btn.label || '').slice(0, 80)).setStyle(ButtonStyle.Primary);
+                const button = new ButtonBuilder().setCustomId(`ticket_btn_${i}`).setLabel(String(btn.label).slice(0, 80)).setStyle(ButtonStyle.Primary);
                 if (btn.emoji) {
                     const em = btn.emoji.trim();
                     try { button.setEmoji(/^\d+$/.test(em) ? { id: em } : em); } catch (e) {}
                 }
-                btnRow.addComponents(button);
+                const rowIndex = Math.floor(buttonRows.reduce((count, row) => count + row.length, 0) / 5);
+                if (!buttonRows[rowIndex]) buttonRows[rowIndex] = [];
+                buttonRows[rowIndex].push(button);
             });
-            if (btnRow.components.length > 0) components.push(btnRow);
+            buttonRows.forEach(row => components.push(new ActionRowBuilder().addComponents(row)));
         }
         if (Array.isArray(tConfig.menuOptions) && tConfig.menuOptions.length > 0) {
             const select = new StringSelectMenuBuilder().setCustomId('ticket_menu').setPlaceholder('اختر من القائمة...');
