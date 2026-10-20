@@ -60,6 +60,9 @@ const ticketDataSchema = new mongoose.Schema({
     ownerId: String,
     activeTicketKey: String,
     ticketType: { type: String, default: 'تذكرة دعم' },
+    reason: { type: String, default: '' },
+    rating: { type: Number, min: 1, max: 5, default: null },
+    ratingSkipped: { type: Boolean, default: false },
     adminRole: String,
     categoryId: String,
     claimedBy: String,
@@ -250,6 +253,7 @@ const TicketRating = mongoose.model('TicketRating', new mongoose.Schema({
     channelId: { type: String, required: true },
     ownerId: { type: String, required: true },
     rating: { type: Number, required: true, min: 1, max: 5 },
+    reason: { type: String, default: '' },
     createdAt: { type: Date, default: Date.now }
 }));
 
@@ -257,6 +261,7 @@ const TicketConfig = mongoose.model('TicketConfig', new mongoose.Schema({
     guildId: String,
     channelId: String,
     panelMessageId: String,
+    closeLogChannelId: String,
     title: String,
     description: String,
     color: String,
@@ -960,7 +965,18 @@ function ui(guild, active, content) {
         ['notificationroles', 'رتب الإشعارات', `/manage/${guildId}/notificationroles`, '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/><circle cx="18" cy="5" r="3"/>'],
         
     ] : [];
-    const navHtml = nav.map(([key, label, href, path]) => `<a class="rail-link ${active === key ? 'is-active' : ''}" href="${href}" aria-current="${active === key ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${path}</svg><span>${label}</span><i></i></a>`).join('');
+    const navGroups = [
+        { id: 'core', title: 'المساحة', keys: ['home'] },
+        { id: 'moderation', title: 'الإدارة والحماية', keys: ['security', 'admincmd', 'logs'] },
+        { id: 'community', title: 'تجربة المجتمع', keys: ['tickets', 'suggestions', 'autoreply', 'levels', 'welcome'] },
+        { id: 'engagement', title: 'التفاعل والأنظمة', keys: ['giveaway', 'kick', 'notificationroles'] }
+    ];
+    const navHtml = navGroups.map(group => {
+        const entries = nav.filter(([key]) => group.keys.includes(key));
+        if (!entries.length) return '';
+        const open = entries.some(([key]) => key === active);
+        return `<details class="nav-group" data-group="${group.id}" ${open ? 'open' : ''}><summary><span>${group.title}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><div class="nav-group-links">${entries.map(([key, label, href, icon]) => `<a class="rail-link ${active === key ? 'is-active' : ''}" href="${href}" aria-label="${label}" title="${label}" data-label="${label.toLocaleLowerCase('ar') }" aria-current="${active === key ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg><span>${label}</span><i></i></a>`).join('')}</div></details>`;
+    }).join('');
     return `<!doctype html>
 <html dir="rtl" lang="ar">
 <head>
@@ -983,6 +999,12 @@ html{background:#090c18}body{background:radial-gradient(ellipse at 18% 4%,rgba(9
 .rail{padding:25px 17px 19px;background:linear-gradient(180deg,rgba(17,23,42,.985),rgba(9,12,24,.99));border-left:1px solid rgba(153,177,255,.12);box-shadow:-20px 0 65px rgba(0,0,0,.22);backdrop-filter:blur(25px)}.brand{padding:4px 10px 25px;border-bottom-color:rgba(153,177,255,.12)}.brand-mark{width:43px;height:43px;border-radius:15px;color:#0b1320;background:linear-gradient(145deg,#b1fff4,#64d7e5 52%,#788aff);box-shadow:0 12px 27px rgba(89,209,218,.2)}.brand strong{letter-spacing:1.3px}.brand small{color:#7885a7;letter-spacing:1.5px}.rail-section{color:#687595}.rail-nav{scrollbar-color:#687eff transparent}.rail-link{min-height:45px;border-radius:13px;color:#9ba7c7}.rail-link:hover{background:rgba(116,140,255,.09);color:#f2f5ff;transform:translateX(-4px)}.rail-link.is-active{background:linear-gradient(105deg,rgba(111,225,213,.13),rgba(113,139,255,.12));border-color:rgba(111,225,213,.2);color:#8dece0;box-shadow:inset -3px 0 #6fe1d5,0 8px 24px rgba(38,92,112,.12)}.rail-link.is-active i{background:#6fe1d5;box-shadow:0 0 13px #6fe1d5}.rail-footer{border-top-color:rgba(153,177,255,.12)}.rail-footer a{color:#ff819d}
 .workspace{margin-right:var(--rail)}.topbar{height:80px;padding:0 clamp(20px,3.3vw,52px);border-bottom-color:rgba(153,177,255,.11);background:rgba(9,12,24,.76);box-shadow:0 10px 35px rgba(0,0,0,.08);backdrop-filter:blur(24px)}.crumb{color:#7d89a9}.crumb b{font-size:17px}.top-status{border:1px solid rgba(111,225,213,.16);background:rgba(111,225,213,.045);color:#aeb9d4}.status-dot{background:#6fe1d5;box-shadow:0 0 13px #6fe1d5}.top-actions a{border-color:rgba(153,177,255,.15);border-radius:12px;background:rgba(255,255,255,.025);color:#a1aed0}.top-actions a:hover{color:#8dece0;border-color:rgba(111,225,213,.4);background:rgba(111,225,213,.06)}
 .content{padding:clamp(22px,3.2vw,46px) clamp(15px,3.2vw,48px) 70px;max-width:1600px}.welcome-strip{min-height:155px;padding:30px 34px;border-color:rgba(153,177,255,.16);border-radius:24px;background:linear-gradient(112deg,rgba(103,126,255,.16),rgba(18,26,48,.9) 49%,rgba(40,173,164,.08)),var(--panel);box-shadow:0 24px 68px rgba(0,0,0,.22)}.welcome-strip:after{content:'✦';left:34px;top:-32px;color:rgba(126,154,255,.09);font:900 185px 'Cairo',sans-serif}.welcome-strip h1{font-size:clamp(24px,3vw,34px)}.eyebrow{color:#8ee7df}.welcome-strip p{color:#929dbb}.welcome-meta{color:#98a5c5}.pro-ribbon{border-color:rgba(111,225,213,.2);color:#b4f3e9;background:rgba(111,225,213,.055);border-radius:999px}.pro-ribbon svg{color:#6fe1d5}.card{position:relative;background:linear-gradient(145deg,rgba(22,30,53,.94),rgba(14,19,36,.97));border-color:rgba(153,177,255,.14);border-radius:20px;box-shadow:0 15px 48px rgba(0,0,0,.18)}.card:hover{border-color:rgba(111,225,213,.27)}.card h3{color:#eef1ff}.card h3 svg{color:#80e8df}.label,label{color:#a9b3d0}input,select,textarea{color:#f0f3ff;background:rgba(7,11,24,.76);border-color:rgba(153,177,255,.16);border-radius:12px}input:focus,select:focus,textarea:focus{border-color:#6fe1d5;box-shadow:0 0 0 3px rgba(111,225,213,.1)}input::placeholder,textarea::placeholder{color:#687595}.btn-save{background:linear-gradient(110deg,#9af4e5,#61d3dc 48%,#8997ff);color:#0a1322;border-radius:12px;box-shadow:0 10px 28px rgba(74,190,202,.15)}.btn-save:hover{box-shadow:0 15px 35px rgba(74,190,202,.24)}.btn-danger{background:linear-gradient(115deg,#ff839e,#ed547b)!important;color:#210814!important}.tag-blue{background:rgba(111,225,213,.08);color:#9aefe4;border-color:rgba(111,225,213,.18)}.tag-red{background:rgba(255,102,138,.09);color:#ff9db3;border-color:rgba(255,102,138,.2)}.data-table{border-color:rgba(153,177,255,.13);border-radius:15px}.data-table th{background:rgba(116,140,255,.09);color:#aebaff}.data-table td{border-top-color:rgba(153,177,255,.08);color:#c3cbe0}.data-table tbody tr:hover{background:rgba(111,225,213,.035)}.stats-grid{gap:15px}.stat-box{position:relative;overflow:hidden;border-color:rgba(153,177,255,.13);border-radius:17px;background:linear-gradient(135deg,rgba(28,38,68,.72),rgba(17,23,42,.52))}.stat-box:after{content:'';position:absolute;width:80px;height:80px;left:-27px;bottom:-43px;border:1px solid rgba(111,225,213,.16);border-radius:50%;box-shadow:0 0 0 14px rgba(111,225,213,.018),0 0 0 29px rgba(111,225,213,.012)}.stat-num{color:#82e8dd}.stat-label{color:#929dbb}.stat-box:hover{border-color:rgba(111,225,213,.34);background:rgba(111,225,213,.04)}.icon-badge{border-color:rgba(111,225,213,.26);border-radius:14px;background:linear-gradient(145deg,rgba(111,225,213,.12),rgba(113,139,255,.1));color:#8dece0}.pro-pill{border-color:rgba(111,225,213,.24);color:#b5f3ea;background:linear-gradient(100deg,rgba(111,225,213,.1),rgba(113,139,255,.06));box-shadow:0 0 20px rgba(111,225,213,.06)}.pro-pill i{background:#6fe1d5;box-shadow:0 0 11px #6fe1d5}.top-status:after{background:linear-gradient(100deg,transparent 15%,rgba(111,225,213,.12),transparent 80%)}
+
+/* Collapsible NEXUS rail */
+.rail{transition:width .34s cubic-bezier(.2,.8,.2,1),padding .34s,transform .25s}.brand{position:relative;min-height:68px;align-items:center}.brand-copy{min-width:0;transition:opacity .18s,transform .25s}.rail-collapse{margin-right:auto;width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(153,177,255,.14);border-radius:11px;background:rgba(255,255,255,.025);color:#9aa8ce;cursor:pointer;transition:.2s}.rail-collapse:hover{border-color:rgba(111,225,213,.4);color:#8dece0;transform:translateX(-2px)}.rail-collapse svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.rail-search{position:relative;display:flex;align-items:center;gap:9px;margin:17px 2px 9px;padding:0 11px;height:42px;border:1px solid rgba(153,177,255,.12);border-radius:13px;background:rgba(5,9,20,.5);color:#8290b2}.rail-search svg{width:17px;height:17px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8}.rail-search input{height:38px!important;min-width:0;padding:0!important;border:0!important;box-shadow:none!important;background:transparent!important;font-size:10px!important}.rail-search kbd{flex:none;padding:2px 6px;border:1px solid rgba(153,177,255,.15);border-radius:5px;color:#7482a4;font:10px 'IBM Plex Mono',monospace}.rail-nav{gap:9px;padding:3px 1px 10px}.nav-group{border:1px solid transparent;border-radius:14px;padding:2px 4px 5px;transition:background .2s,border-color .2s}.nav-group[open]{background:rgba(255,255,255,.014);border-color:rgba(153,177,255,.07)}.nav-group>summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 9px;list-style:none;cursor:pointer;color:#7784a6;font-size:9px;font-weight:800;letter-spacing:.7px;user-select:none}.nav-group>summary::-webkit-details-marker{display:none}.nav-group>summary svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;transition:transform .22s}.nav-group[open]>summary svg{transform:rotate(180deg)}.nav-group-links{display:grid;gap:3px;overflow:hidden;animation:group-open .24s ease both}.rail-link[hidden],.nav-group[hidden]{display:none!important}.rail-link{position:relative}.rail-link:before{content:attr(aria-label);position:absolute;right:calc(100% + 13px);top:50%;transform:translate(5px,-50%);padding:7px 10px;border-radius:9px;background:#1a2440;border:1px solid rgba(153,177,255,.18);color:#edf2ff;font-size:10px;white-space:nowrap;opacity:0;pointer-events:none;transition:.15s;box-shadow:0 8px 24px rgba(0,0,0,.28)}.rail-compact .rail{width:82px;padding:20px 10px}.rail-compact .workspace{margin-right:82px}.rail-compact .brand{justify-content:center;padding:2px 0 19px}.rail-compact .brand-copy,.rail-compact .rail-search input,.rail-compact .rail-search kbd,.rail-compact .nav-group>summary span,.rail-compact .rail-link span,.rail-compact .rail-link>i,.rail-compact .rail-guild-name{display:none}.rail-compact .rail-collapse{position:absolute;top:7px;left:0;margin:0;width:29px;height:29px}.rail-compact .rail-collapse svg{transform:rotate(180deg)}.rail-compact .rail-search{justify-content:center;margin:14px 0 10px;padding:0}.rail-compact .rail-search svg{width:19px;height:19px}.rail-compact .rail-nav{overflow:visible}.rail-compact .nav-group{padding:2px 0;border-color:transparent;background:transparent}.rail-compact .nav-group>summary{justify-content:center;padding:7px 0;font-size:0}.rail-compact .nav-group>summary svg{width:12px;height:12px}.rail-compact .nav-group-links{gap:5px}.rail-compact .rail-link{justify-content:center;min-height:45px;padding:9px 0}.rail-compact .rail-link svg{width:20px;height:20px}.rail-compact .rail-link:before{display:block}.rail-compact .rail-link:hover:before{opacity:1;transform:translate(0,-50%)}.rail-compact .rail-footer{padding:12px 0 0;text-align:center}.rail-compact .rail-footer form{float:none;display:block!important;margin-top:8px}.rail-compact .rail-footer button{font-size:9px!important}.rail-compact .rail-footer a{display:none}.rail-compact .nav-group:not([open]) .nav-group-links{display:none}.rail-compact .rail-link.is-active{box-shadow:inset 0 -2px #6fe1d5,0 5px 20px rgba(38,92,112,.12)}@keyframes group-open{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:700px){.rail-collapse{display:none}.rail-compact .rail{width:min(310px,88vw);padding:25px 17px 19px}.rail-compact .workspace{margin-right:0}.rail-compact .brand{justify-content:flex-start;padding:4px 10px 25px}.rail-compact .brand-copy{display:block}.rail-compact .rail-search input,.rail-compact .rail-search kbd,.rail-compact .nav-group>summary span,.rail-compact .rail-link span,.rail-compact .rail-link>i,.rail-compact .rail-guild-name{display:initial}.rail-compact .rail-nav{overflow:auto}.rail-compact .nav-group>summary{justify-content:space-between;padding:10px 9px;font-size:9px}.rail-compact .nav-group>summary svg{width:14px;height:14px}.rail-compact .rail-link{justify-content:flex-start;min-height:45px;padding:9px 11px}.rail-compact .rail-link:before{display:none}.rail-compact .rail-footer{text-align:right;padding:15px 10px 0}.rail-compact .rail-footer form{display:inline!important;margin:0}.rail-compact .rail-footer button{font-size:inherit!important}.rail-compact .rail-footer a{display:initial}.rail-compact .nav-group[open] .nav-group-links{display:grid}}
+
+.welcome-strip[hidden]{display:none!important}
 .server-selection .rail{display:none}.server-selection .workspace{margin-right:0}.server-selection .topbar{padding-inline:clamp(20px,5vw,74px)}.server-selection .content{max-width:1440px}
 /* Full-width server discovery */
 .server-picker{position:relative;overflow:hidden;margin:0 0 24px;padding:clamp(24px,4vw,46px);border:1px solid rgba(153,177,255,.16);border-radius:27px;background:radial-gradient(ellipse at 8% 0%,rgba(113,139,255,.18),transparent 40%),radial-gradient(ellipse at 100% 100%,rgba(111,225,213,.095),transparent 35%),linear-gradient(135deg,rgba(19,27,49,.96),rgba(13,18,34,.96));box-shadow:0 25px 80px rgba(0,0,0,.24)}.server-picker:after{content:'NEXUS';position:absolute;left:2%;bottom:-48px;color:rgba(171,189,255,.025);font:900 clamp(80px,15vw,190px) 'IBM Plex Mono',monospace;letter-spacing:-12px;pointer-events:none}.server-picker-top{position:relative;z-index:1;display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.server-picker h1{font-size:clamp(28px,4vw,43px);line-height:1.25;margin:9px 0 8px;letter-spacing:-1px}.server-picker p{margin:0;color:#94a0bf;font-size:12px;line-height:1.9}.server-count{flex:none;min-width:116px;padding:14px 17px;border:1px solid rgba(111,225,213,.19);border-radius:17px;background:rgba(111,225,213,.055);text-align:center}.server-count b{display:block;color:#9af1e5;font:700 25px 'IBM Plex Mono',monospace}.server-count small{color:#8694b6;font-size:9px}.server-tools{position:relative;z-index:1;display:flex;align-items:center;gap:12px;margin-top:26px}.server-search-wrap{position:relative;flex:1}.server-search-wrap svg{position:absolute;right:17px;top:50%;width:18px;height:18px;transform:translateY(-50%);stroke:#7d8aac;fill:none;stroke-width:1.8}.server-search-wrap input{height:51px;padding-right:47px;border-radius:15px;background:rgba(7,11,24,.66)}.server-sort{width:165px;height:51px;margin:0}.server-grid{position:relative;display:grid;grid-template-columns:repeat(auto-fill,minmax(265px,1fr));gap:17px}.server-card{position:relative;isolation:isolate;overflow:hidden;min-height:186px;padding:20px;border:1px solid rgba(153,177,255,.14);border-radius:20px;background:linear-gradient(150deg,rgba(24,33,59,.92),rgba(14,20,38,.97));text-decoration:none;box-shadow:0 14px 38px rgba(0,0,0,.13);transition:transform .28s cubic-bezier(.2,.8,.2,1),border-color .28s,box-shadow .28s}.server-card:before{content:'';position:absolute;z-index:-1;inset:0;background:radial-gradient(circle at 5% 3%,rgba(113,139,255,.17),transparent 43%);opacity:.75;transition:opacity .25s}.server-card:after{content:'';position:absolute;z-index:-1;left:-60%;top:-70%;width:90%;height:240%;transform:rotate(25deg);background:linear-gradient(90deg,transparent,rgba(255,255,255,.055),transparent);transition:left .6s}.server-card:hover{transform:translateY(-7px);border-color:rgba(111,225,213,.42);box-shadow:0 25px 60px rgba(0,0,0,.28),0 0 26px rgba(87,216,205,.055)}.server-card:hover:after{left:120%}.server-card-head{display:flex;align-items:center;gap:14px}.server-icon-wrap{position:relative;width:59px;height:59px;flex:none}.server-icon{width:59px;height:59px;border-radius:19px;object-fit:cover;border:1px solid rgba(171,190,255,.2);box-shadow:0 9px 25px rgba(0,0,0,.24)}.server-icon-fallback{display:grid;place-items:center;background:linear-gradient(145deg,#273a67,#193d4f);color:#a5f4eb;font-size:22px;font-weight:900}.server-online{position:absolute;right:-3px;bottom:-3px;width:13px;height:13px;border:3px solid #12192d;border-radius:50%;background:#6fe1d5;box-shadow:0 0 10px rgba(111,225,213,.5)}.server-title{min-width:0;flex:1}.server-title h2{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0;color:#f1f3ff;font-size:15px;font-weight:800}.server-title small{display:block;margin-top:4px;color:#8491b1;font:500 8px 'IBM Plex Mono',monospace;letter-spacing:1px}.server-member-count{display:flex;align-items:center;gap:7px;margin:20px 0 17px;color:#96a1bd;font-size:10px}.server-member-count svg{width:16px;height:16px;stroke:#83e5dc;fill:none;stroke-width:1.7}.server-open{display:flex;justify-content:space-between;align-items:center;padding-top:13px;border-top:1px solid rgba(153,177,255,.1);color:#b8c4e2;font-size:10px;font-weight:700}.server-open i{font-style:normal;color:#83ebe0;font-size:16px;transition:transform .2s}.server-card:hover .server-open i{transform:translateX(-5px)}.server-empty{grid-column:1/-1;text-align:center;padding:45px 20px;border:1px dashed rgba(153,177,255,.2);border-radius:20px;background:rgba(17,23,42,.55)}.server-empty svg{width:42px;height:42px;stroke:#8295c1;fill:none}.server-empty h2{font-size:17px}.server-empty p{color:#8c98b6;font-size:11px}.server-empty[hidden]{display:none!important}.server-no-results{display:none;text-align:center;padding:36px;color:#95a0bd}
@@ -995,12 +1017,21 @@ html{background:#090c18}body{background:radial-gradient(ellipse at 18% 4%,rgba(9
 </head>
 <body>
 <div class="app ${guildId ? 'guild-workspace' : 'server-selection'}">
-<aside class="rail" id="rail"><div class="brand"><div class="brand-mark">D</div><div><strong>Drayz System</strong><small>CONTROL CENTER</small><span class="pro-pill"><i></i> PRO EDITION</span></div></div>${guildId ? '<div class="rail-section">Workspace</div><nav class="rail-nav">'+navHtml+'</nav>' : ''}<div class="rail-footer">${guildId ? safe(guildName) : 'إدارة السيرفرات'}<form action="/logout" method="POST" style="display:inline"><button type="submit" style="background:none;border:0;color:var(--red);font:inherit;cursor:pointer;padding:0">خروج</button></form></div></aside>
+<aside class="rail" id="rail"><div class="brand"><div class="brand-mark">D</div><div class="brand-copy"><strong>Drayz System</strong><small>CONTROL CENTER</small><span class="pro-pill"><i></i> PRO EDITION</span></div><button class="rail-collapse" id="railCollapse" type="button" title="تصغير القائمة" aria-label="تصغير القائمة"><svg viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></svg></button></div>${guildId ? '<label class="rail-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input id="railSearch" type="search" placeholder="ابحث في الأقسام" autocomplete="off" aria-label="ابحث في أقسام القائمة"><kbd>/</kbd></label><nav class="rail-nav" id="railNav">'+navHtml+'</nav>' : ''}<div class="rail-footer"><span class="rail-guild-name">${guildId ? safe(guildName) : 'إدارة السيرفرات'}</span><form action="/logout" method="POST" style="display:inline"><button type="submit" style="background:none;border:0;color:var(--red);font:inherit;cursor:pointer;padding:0">خروج</button></form></div></aside>
 <div class="drawer-backdrop" id="backdrop"></div>
 <section class="workspace"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="فتح القائمة">☰</button><div class="crumb"><span>Drayz System / PRO CONTROL CENTER</span><b>${safe(guildName)}</b></div><div class="top-status"><span class="status-dot"></span> PRO SYSTEM · ONLINE</div><div class="top-actions"><a href="/dashboard" title="السيرفرات" aria-label="السيرفرات"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9v11h13V9M9 20v-6h6v6"/></svg></a><form action="/logout" method="POST" style="display:inline"><button type="submit" title="تسجيل الخروج" aria-label="تسجيل الخروج" style="width:38px;height:38px;display:grid;place-items:center;border:1px solid var(--line);border-radius:12px;color:var(--muted);background:rgba(255,255,255,.025);cursor:pointer"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 17l5-5-5-5M15 12H3"/><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6"/></svg></button></form></div></header><main class="content"><section class="welcome-strip" ${guildId ? '' : 'hidden'}><div><div class="eyebrow">ADMINISTRATIVE WORKSPACE · PRO EDITION</div><h1>${safe(guildName)}</h1><p>تحكم بكل أنظمة السيرفر من مساحة واحدة واضحة وسريعة.</p><span class="pro-ribbon"><svg viewBox="0 0 24 24"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg> DRAYZ PRO · PREMIUM SERVER MANAGEMENT</span></div><div class="welcome-meta">LIVE / ${new Date().toLocaleDateString('en-GB')}</div></section><div class="view">${content}</div></main></section>
 </div>
 <script>
-(() => { const rail=document.getElementById('rail'), backdrop=document.getElementById('backdrop'), btn=document.getElementById('menuBtn'); if(!rail||!backdrop||!btn)return; const close=()=>{rail.classList.remove('is-open');backdrop.classList.remove('is-open')}; btn.addEventListener('click',()=>{rail.classList.toggle('is-open');backdrop.classList.toggle('is-open')}); backdrop.addEventListener('click',close); window.addEventListener('keydown',e=>{if(e.key==='Escape')close()}); })();
+(() => {
+ const rail=document.getElementById('rail'),backdrop=document.getElementById('backdrop'),mobileBtn=document.getElementById('menuBtn'),collapseBtn=document.getElementById('railCollapse');
+ const close=()=>{rail?.classList.remove('is-open');backdrop?.classList.remove('is-open')};
+ mobileBtn?.addEventListener('click',()=>{rail?.classList.toggle('is-open');backdrop?.classList.toggle('is-open')});backdrop?.addEventListener('click',close);
+ const applyCompact=value=>{document.body.classList.toggle('rail-compact',value);if(collapseBtn){collapseBtn.setAttribute('aria-label',value?'توسيع القائمة':'تصغير القائمة');collapseBtn.title=value?'توسيع القائمة':'تصغير القائمة'}};
+ try{applyCompact(localStorage.getItem('drayz-rail-compact')==='1')}catch{}
+ collapseBtn?.addEventListener('click',()=>{const value=!document.body.classList.contains('rail-compact');applyCompact(value);try{localStorage.setItem('drayz-rail-compact',value?'1':'0')}catch{}});
+ const search=document.getElementById('railSearch');search?.addEventListener('input',()=>{const q=search.value.trim().toLocaleLowerCase('ar');document.querySelectorAll('.rail-link').forEach(link=>{link.hidden=!link.dataset.label.includes(q)});document.querySelectorAll('.nav-group').forEach(group=>{const links=[...group.querySelectorAll('.rail-link')];group.hidden=links.every(link=>link.hidden);if(q&&links.some(link=>!link.hidden))group.open=true})});
+ window.addEventListener('keydown',e=>{if(e.key==='Escape')close();if(e.key==='/'&&!e.ctrlKey&&!e.metaKey&&!['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)){e.preventDefault();search?.focus()}});
+})();
  document.querySelectorAll('form[method=\"POST\"]').forEach(form=>form.addEventListener('submit',()=>{const button=form.querySelector('button[type=submit],button:not([type])');if(!button||button.dataset.busy)return;button.dataset.busy='1';button.dataset.original=button.innerHTML;button.innerHTML='<span aria-live=\"polite\">جارٍ تنفيذ العملية…</span>';button.disabled=true;}));
 </script>
 </body></html>`;
@@ -1873,11 +1904,14 @@ app.get('/manage/:guildId/tickets', checkAuth, async (req, res) => {
                 </div>
             </div>
 
-            <label style="margin-top:16px;">قناة الإرسال (اختياري)</label>
+            <label style="margin-top:16px;">قناة الإرسال للوحة التذاكر</label>
             <select name="targetChannel">
                 <option value="">-- لا ترسل الآن --</option>
                 ${g.channels.cache.filter(c => c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement).map(c => `<option value="${c.id}" ${s.channelId === c.id ? 'selected' : ''}># ${escapeHtml(c.name)}</option>`).join('')}
             </select>
+            <label style="margin-top:16px;">روم سجل إغلاق التذاكر والتقييمات</label>
+            <select name="closeLogChannelId"><option value="">-- بدون سجل منفصل --</option>${g.channels.cache.filter(c => c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement).map(c => `<option value="${c.id}" ${s.closeLogChannelId === c.id ? 'selected' : ''}># ${escapeHtml(c.name)}</option>`).join('')}</select>
+            <small style="display:block;color:var(--muted);margin-top:6px">سيُرسل إيمبد يتضمن الفاتح والمستلم والمغلق والسبب والتقييم والتاريخ.</small>
             <button class="btn-save" style="margin-top:20px;">حفظ وإرسال</button>
         </div>
     </form>`;
@@ -1916,7 +1950,15 @@ app.post('/save/:guildId/tickets', checkAuth, upload.fields([{ name: 'topImage' 
             if (menuLabel) menuOptions.push({ label: menuLabel, emoji: menuEmoji, description: menuDescription, adminRole: menuRole, categoryId: menuCategory });
         }
         const prior = await TicketConfig.findOne({ guildId: guild.id });
-        const updateData = { title, description, color, buttons, menuOptions };
+        const closeLogChannelId = String(b.closeLogChannelId || '');
+        let closeLogChannel = null;
+        if (closeLogChannelId) {
+            closeLogChannel = guild.channels.cache.get(closeLogChannelId);
+            if (!closeLogChannel?.isTextBased?.()) return res.status(400).send('اختر روم سجل نصي صالحًا.');
+            const logPerms = closeLogChannel.permissionsFor(guild.members.me);
+            if (!logPerms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) return res.status(403).send('البوت يحتاج صلاحيات عرض روم السجل وإرسال الرسائل والإيمبدات فيه.');
+        }
+        const updateData = { title, description, color, buttons, menuOptions, closeLogChannelId };
         if (req.files?.topImage?.[0]) updateData.topImagePath = req.files.topImage[0].path;
         if (req.files?.bottomImage?.[0]) updateData.bottomImagePath = req.files.bottomImage[0].path;
         const targetId = String(b.targetChannel || '');
@@ -3541,22 +3583,39 @@ client.on('interactionCreate', async (interaction) => {
             if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على سجل التذكرة.', ephemeral: true });
             if (ticketData.ownerId !== interaction.user.id) return interaction.reply({ content: 'التقييم متاح لصاحب التذكرة فقط.', ephemeral: true });
             if (!ticketData.closedAt) return interaction.reply({ content: 'يمكنك التقييم بعد إغلاق التذكرة.', ephemeral: true });
+            if (ticketData.ratingSkipped) return interaction.reply({ content: 'تم إغلاق التذكرة بدون تقييم.', ephemeral: true });
             try {
-                await TicketRating.create({ guildId: interaction.guild.id, ticketId: ticketData._id, channelId: ticketData.channelId, ownerId: interaction.user.id, rating: score });
+                await TicketRating.create({ guildId: interaction.guild.id, ticketId: ticketData._id, channelId: ticketData.channelId, ownerId: interaction.user.id, rating: score, reason: ticketData.reason || '' });
             } catch (error) {
                 if (error?.code === 11000) return interaction.reply({ content: 'تم إرسال تقييم لهذه التذكرة مسبقًا، شكرًا لك.', ephemeral: true });
                 throw error;
             }
+            ticketData.rating = score;
+            await ticketData.save();
+            await sendTicketCloseLog(ticketData, interaction.guild, score).catch(error => console.error('[Ticket Close Log Error]', error.message));
             const icons = '★'.repeat(score) + '☆'.repeat(5-score);
-            await interaction.update({ content: `تم تسجيل تقييمك بنجاح\n${icons}  **${score}/5** — شكرًا لك. أُغلقت التذكرة وأُخفيت من قائمة تذاكرك.`, components: [] }).catch(async () => interaction.reply({ content: `تم حفظ تقييمك: ${icons} (${score}/5).`, ephemeral: true }));
-            try {
-                await interaction.channel.permissionOverwrites.edit(ticketData.ownerId, { ViewChannel: false, SendMessages: false });
-                ticketData.archivedAt = new Date();
-                await ticketData.save();
-            } catch (archiveError) {
-                console.error('[Ticket Archive Error]', archiveError.message);
-                await interaction.followUp({ content: 'تم حفظ تقييمك، لكن تعذر إخفاء القناة تلقائيًا؛ أبلغ الإدارة للتحقق من صلاحيات البوت.', ephemeral: true }).catch(() => {});
-            }
+            await interaction.update({ content: `تم تسجيل تقييمك بنجاح\n${icons}  **${score}/5** — سيتم إغلاق التذكرة وحذف القناة بعد 5 ثوانٍ.`, components: [] });
+            const channel = interaction.channel;
+            setTimeout(() => channel?.delete('انتهى التقييم؛ حذف التكت بعد مهلة الخمس ثواني').catch(error => console.error('[Ticket Delete After Rating Error]', error.message)), 5000).unref?.();
+            return;
+        }
+
+        if (interaction.isButton() && interaction.customId.startsWith('ticket_close_skip:')) {
+            const ticketId = interaction.customId.split(':')[1];
+            const ticketData = await TicketData.findOne({ _id: ticketId, guildId: interaction.guild.id, channelId: interaction.channelId });
+            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
+            const tConfig = await TicketConfig.findOne({ guildId: interaction.guild.id });
+            const isAdmin = Boolean((ticketData.adminRole && interaction.member.roles.cache.has(ticketData.adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) || interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild));
+            if (!isAdmin && ticketData.ownerId !== interaction.user.id) return interaction.reply({ content: 'هذا الزر متاح لصاحب التكت أو الإدارة فقط.', ephemeral: true });
+            if (!ticketData.closedAt) return interaction.reply({ content: 'أغلق التكت أولًا من قائمة التحكم.', ephemeral: true });
+            if (ticketData.rating != null) return interaction.reply({ content: 'تم إرسال تقييم لهذه التذكرة بالفعل.', ephemeral: true });
+            if (ticketData.ratingSkipped) return interaction.reply({ content: 'تم اختيار الإغلاق بدون تقييم مسبقًا.', ephemeral: true });
+            ticketData.ratingSkipped = true;
+            await ticketData.save();
+            await interaction.update({ content: 'أُغلقت التذكرة بدون تقييم. سيتم حذف القناة الآن.', components: [] });
+            await sendTicketCloseLog(ticketData, interaction.guild, null).catch(error => console.error('[Ticket Close Log Error]', error.message));
+            const channel = interaction.channel;
+            setTimeout(() => channel?.delete('إغلاق التكت بدون تقييم').catch(error => console.error('[Ticket Delete Without Rating Error]', error.message)), 1500).unref?.();
             return;
         }
 
@@ -3593,10 +3652,13 @@ client.on('interactionCreate', async (interaction) => {
                     throw error;
                 }
                 const ratingRow = new ActionRowBuilder().addComponents([1,2,3,4,5].map(score =>
-                    new ButtonBuilder().setCustomId(`ticket_rate:${ticketData._id}:${score}`).setLabel(`${score}  ★`).setStyle(score >= 4 ? ButtonStyle.Success : ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId(`ticket_rate:${ticketData._id}:${score}`).setLabel(`${score}  ${'★'.repeat(score)}`).setStyle(score >= 4 ? ButtonStyle.Success : ButtonStyle.Secondary)
                 ));
+                const closeRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`ticket_close_skip:${ticketData._id}`).setLabel('إغلاق بدون تقييم').setStyle(ButtonStyle.Danger)
+                );
                 try {
-                    await interaction.channel.send({ content: `تم إغلاق التذكرة بواسطة ${interaction.user}.\n**كيف كانت تجربتك؟** اختر تقييمك من 1 إلى 5.`, components: [ratingRow], allowedMentions: { users: [interaction.user.id] } });
+                    await interaction.channel.send({ content: `<@${ticketData.ownerId}>`, embeds: [new EmbedBuilder().setColor(0x718bff).setTitle('كيف كانت تجربتك؟').setDescription('اختر تقييمك من الأزرار أدناه. بعد إرسال التقييم ستُحذف قناة التذكرة خلال **5 ثوانٍ**. إذا لا ترغب بالتقييم استخدم زر **إغلاق بدون تقييم**.').addFields({ name: 'التذكرة', value: `#${ticketData.ticketCount || '—'} · ${String(ticketData.ticketType || 'دعم').slice(0, 80)}`, inline: true }, { name: 'أغلقها', value: `<@${interaction.user.id}>`, inline: true }).setTimestamp()], components: [ratingRow, closeRow], allowedMentions: { users: [ticketData.ownerId] } });
                 } catch (error) {
                     console.error('[Ticket Rating Prompt Error]', error.message);
                     ticketData.closedAt = null;
@@ -3612,7 +3674,7 @@ client.on('interactionCreate', async (interaction) => {
                     await TicketData.updateOne({ _id: ticketData._id }, { $unset: { activeTicketKey: 1 } }).catch(() => {});
                 }
                 await interaction.message.edit({ components: [] }).catch(() => {});
-                await interaction.reply({ content: 'تم إغلاق التكت وظهرت أزرار التقييم لصاحبه. بعد التقييم ستُخفى القناة عنه وتبقى محفوظة للإدارة.', ephemeral: true });
+                await interaction.reply({ content: 'تم إغلاق التكت وظهر التقييم لصاحبه. لا يوجد أرشيف للقناة؛ التقييم يحذفها بعد 5 ثوانٍ، أو يمكن إغلاقها فورًا بدون تقييم.', ephemeral: true });
                 return;
             }
 
@@ -3641,6 +3703,24 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
+        // --- [ Ticket Reason Modal ] ---
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_reason:')) {
+            const [, sourceKind, indexText] = interaction.customId.split(':');
+            const reason = String(interaction.fields.getTextInputValue('ticket_reason_text') || '').trim().slice(0, 1000);
+            if (reason.length < 5) return interaction.reply({ content: 'اكتب سببًا واضحًا من 5 أحرف على الأقل.', ephemeral: true });
+            const tConfig = await TicketConfig.findOne({ guildId: interaction.guild.id });
+            if (!tConfig) return interaction.reply({ content: 'إعدادات التذاكر غير متاحة؛ أبلغ الإدارة.', ephemeral: true });
+            let ticketType = 'تذكرة دعم';
+            let sectionConfig = {};
+            const index = Number(indexText);
+            if (sourceKind === 'btn' && Number.isInteger(index) && index >= 0) sectionConfig = tConfig.buttons?.[index] || null;
+            else if (sourceKind === 'menu' && Number.isInteger(index) && index >= 0) sectionConfig = tConfig.menuOptions?.[index] || null;
+            else if (sourceKind !== 'generic') sectionConfig = null;
+            if (sectionConfig === null) return interaction.reply({ content: 'نوع التكت لم يعد متاحًا؛ حدّث لوحة التذاكر وحاول مجددًا.', ephemeral: true });
+            if (sectionConfig?.label) ticketType = sectionConfig.label;
+            return openTicket(interaction, tConfig, ticketType, sectionConfig, reason);
+        }
+
         // --- [ Ticket Modals ] ---
         if (interaction.isModalSubmit() && (interaction.customId === 'ticket_add_member' || interaction.customId === 'ticket_remove_member')) {
             const memberId = interaction.fields.getTextInputValue('member_id').trim();
@@ -3665,11 +3745,7 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
     const optIndex = /^ticket_opt_\d+$/.test(selected) ? Number(selected.slice('ticket_opt_'.length)) : -1;
     const sectionConfig = tConfig.menuOptions?.[optIndex];
     if (!sectionConfig) return interaction.reply({ content: 'خيار التذكرة لم يعد متاحًا؛ حدّث اللوحة وحاول مجددًا.', ephemeral: true });
-    let ticketType = 'تذكرة دعم';
-    if (sectionConfig.label) ticketType = sectionConfig.label;
-
-    await openTicket(interaction, tConfig, ticketType, sectionConfig);
-    return;
+    return showTicketReasonModal(interaction, 'menu', optIndex);
 }
 
         // --- [ Ticket Buttons ] ---
@@ -3677,14 +3753,12 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
             const tConfig = await TicketConfig.findOne({ guildId: interaction.guild.id });
             if (!tConfig) return interaction.reply({ content: 'لم يتم العثور على إعدادات التذاكر.', ephemeral: true });
 
-            let ticketType = 'تذكرة دعم';
-            let sectionConfig = {};
             if (interaction.customId.startsWith('ticket_btn_')) {
-                const btnIndex = parseInt(interaction.customId.replace('ticket_btn_', ''));
-                sectionConfig = tConfig.buttons?.[btnIndex] || {};
-                if (sectionConfig.label) ticketType = sectionConfig.label;
+                const btnIndex = Number(interaction.customId.replace('ticket_btn_', ''));
+                if (!Number.isInteger(btnIndex) || !tConfig.buttons?.[btnIndex]) return interaction.reply({ content: 'هذا النوع من التذاكر لم يعد متاحًا؛ حدّث اللوحة.', ephemeral: true });
+                return showTicketReasonModal(interaction, 'btn', btnIndex);
             }
-            await openTicket(interaction, tConfig, ticketType, sectionConfig);
+            return showTicketReasonModal(interaction, 'generic', -1);
         }
         // --- [ Suggestion Menu ] ---
         if (interaction.isStringSelectMenu() && interaction.customId === 'suggestion_menu') {
@@ -3799,7 +3873,45 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
 // 13. Helper Functions
 // ==========================================
 
-async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) {
+function showTicketReasonModal(interaction, sourceKind, index) {
+    const modal = new ModalBuilder()
+        .setCustomId(`ticket_reason:${sourceKind}:${index}`)
+        .setTitle('سبب فتح التذكرة');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('ticket_reason_text').setLabel('اشرح سبب فتح التذكرة').setStyle(TextInputStyle.Paragraph).setPlaceholder('اكتب تفاصيل المشكلة أو طلبك...').setMinLength(5).setMaxLength(1000).setRequired(true)
+    ));
+    return interaction.showModal(modal);
+}
+
+async function sendTicketCloseLog(ticketData, guild, rating) {
+    const config = await TicketConfig.findOne({ guildId: guild.id }).lean();
+    const logChannel = config?.closeLogChannelId && guild.channels.cache.get(config.closeLogChannelId);
+    if (!logChannel?.isTextBased?.()) return false;
+    const opened = ticketData.openedAt ? new Date(ticketData.openedAt) : null;
+    const closed = ticketData.closedAt ? new Date(ticketData.closedAt) : new Date();
+    const fmt = date => date ? date.toLocaleString('ar-JO', { timeZone: 'Asia/Amman', dateStyle: 'medium', timeStyle: 'short' }) : 'غير متوفر';
+    const ratingText = Number.isInteger(Number(rating)) && Number(rating) >= 1 && Number(rating) <= 5 ? `${'★'.repeat(Number(rating))}${'☆'.repeat(5-Number(rating))}  **${rating}/5**` : 'أُغلقت بدون تقييم';
+    const embed = new EmbedBuilder()
+        .setColor(Number.isInteger(Number(rating)) && Number(rating) >= 1 ? (Number(rating) >= 4 ? 0x55d6be : 0xff8ca3) : 0x718bff)
+        .setTitle(`سجل إغلاق التذكرة · #${ticketData.ticketCount || '—'}`)
+        .setDescription(`**نوع التذكرة:** ${String(ticketData.ticketType || 'دعم').slice(0, 100)}\n**سبب فتحها:**\n${String(ticketData.reason || 'لم يُذكر').slice(0, 1000)}`)
+        .addFields(
+            { name: 'صاحب التذكرة', value: `<@${ticketData.ownerId}>`, inline: true },
+            { name: 'استلمها', value: ticketData.claimedBy ? `<@${ticketData.claimedBy}>` : 'لم يستلمها أحد', inline: true },
+            { name: 'أغلقها', value: ticketData.closedBy ? `<@${ticketData.closedBy}>` : 'غير معروف', inline: true },
+            { name: 'التقييم', value: ratingText, inline: true },
+            { name: 'وقت الفتح', value: fmt(opened), inline: true },
+            { name: 'وقت الإغلاق', value: fmt(closed), inline: true },
+            { name: 'القناة', value: `#ticket-${ticketData.ticketCount || 'unknown'} · ${ticketData.channelId}`, inline: false }
+        )
+        .setTimestamp(closed)
+        .setFooter({ text: 'DRAYZ PRO · Ticket Close Report' });
+    const users = [...new Set([ticketData.ownerId, ticketData.claimedBy, ticketData.closedBy].filter(Boolean))];
+    await logChannel.send({ embeds: [embed], allowedMentions: { users } });
+    return true;
+}
+
+async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}, reason = '') {
     let reservation = null;
     let ticketChannel = null;
     try {
@@ -3813,7 +3925,7 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
         const counter = await TicketConfig.findOneAndUpdate({ guildId: interaction.guild.id }, { $inc: { ticketCount: 1 } }, { upsert: true, new: true, setDefaultsOnInsert: true });
         const ticketCount = counter.ticketCount;
         try {
-            reservation = await TicketData.create({ guildId: interaction.guild.id, channelId: '', ownerId: interaction.user.id, activeTicketKey, ticketCount, ticketType, adminRole: sectionConfig.adminRole || '', categoryId: sectionConfig.categoryId || '', openedAt: new Date() });
+            reservation = await TicketData.create({ guildId: interaction.guild.id, channelId: '', ownerId: interaction.user.id, activeTicketKey, ticketCount, ticketType, reason: String(reason || '').trim().slice(0, 1000), adminRole: sectionConfig.adminRole || '', categoryId: sectionConfig.categoryId || '', openedAt: new Date() });
         } catch (error) {
             if (error?.code === 11000) {
                 const current = await TicketData.findOne({ guildId: interaction.guild.id, ownerId: interaction.user.id, closedAt: null, channelId: { $nin: ['', null] } });
@@ -3840,7 +3952,8 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
         const files = [];
         const embed = new EmbedBuilder()
             .setTitle(`تكت ${String(ticketType || 'دعم').slice(0, 180)} | #${ticketCount}`)
-            .setDescription(`مرحباً ${interaction.user}!\n\nالإدارة ستتواصل معك قريباً. يرجى شرح مشكلتك بالتفصيل.`)
+            .setDescription(`مرحباً ${interaction.user}!\n\nالإدارة ستتواصل معك قريباً.`)
+            .addFields({ name: 'سبب فتح التذكرة', value: String(reason || 'لم يُذكر').trim().slice(0, 1000), inline: false })
             .setColor(0xd4af37)
             .addFields({ name: 'صاحب التكت', value: `${interaction.user}`, inline: true }, { name: 'النوع', value: String(ticketType || 'دعم').slice(0, 100), inline: true })
             .setThumbnail(interaction.user.displayAvatarURL())
@@ -3858,7 +3971,7 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
         }
         const controlMenu = new StringSelectMenuBuilder().setCustomId('ticket_control_menu').setPlaceholder('لوحة التحكم بالتكت').addOptions([
             { label: 'استلام التكت', value: 'claim_ticket', description: 'استلام التكت للمعالجة' },
-            { label: 'إغلاق وأرشفة', value: 'close_ticket', description: 'قفل الكتابة وحفظ السجل والتقييم' },
+            { label: 'إغلاق التكت', value: 'close_ticket', description: 'قفل التكت وإرسال تقييم لصاحبه' },
             { label: 'إضافة شخص', value: 'add_member', description: 'إضافة شخص للتكت' },
             { label: 'إزالة شخص', value: 'remove_member', description: 'إزالة شخص من التكت' },
             { label: 'استدعاء صاحب التكت', value: 'summon_member', description: 'إشعار صاحب التكت' }
