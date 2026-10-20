@@ -257,6 +257,12 @@ const TicketRating = mongoose.model('TicketRating', new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 }));
 
+const NamePanelConfig = mongoose.model('NamePanelConfig', new mongoose.Schema({
+    guildId: { type: String, required: true, unique: true },
+    channelId: { type: String, required: true },
+    messageId: { type: String, required: true }
+}));
+
 const TicketConfig = mongoose.model('TicketConfig', new mongoose.Schema({
     guildId: String,
     channelId: String,
@@ -3202,21 +3208,36 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             if (interaction.commandName === 'rename_panel') {
-                const name = interaction.options.getString('name');
+                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'هذا الأمر مخصص لمدير السيرفر.', ephemeral: true });
+                const channel = interaction.options.getChannel('channel');
+                const description = String(interaction.options.getString('description') || '').trim().slice(0, 4000);
+                const emoji = String(interaction.options.getString('emoji') || '').trim();
                 const image = interaction.options.getAttachment('image');
-
-                const embed = new EmbedBuilder()
-                    .setTitle('لوحة تغيير الاسم')
-                    .setDescription(`اضغط على الزر لتغيير اسمك إلى: **${name}**`)
-                    .setColor(0xd4af37);
+                if (![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type)) return interaction.reply({ content: 'اختر رومًا نصيًا أو روم إعلانات.', ephemeral: true });
+                if (!description) return interaction.reply({ content: 'اكتب وصفًا للوحة.', ephemeral: true });
+                if (image && (!String(image.contentType || '').startsWith('image/') || image.size > 8 * 1024 * 1024)) return interaction.reply({ content: 'المرفق لازم يكون صورة وحجمه 8 ميغابايت أو أقل.', ephemeral: true });
+                const botPerms = channel.permissionsFor(interaction.guild.members.me);
+                if (!botPerms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) return interaction.reply({ content: 'البوت يحتاج صلاحيات عرض الروم وإرسال الرسائل والإيمبدات.', ephemeral: true });
+                const embed = new EmbedBuilder().setColor(0x718bff).setTitle('تغيير اسمك داخل السيرفر').setDescription(description).setFooter({ text: 'DRAYZ PRO · SELF NICKNAME' }).setTimestamp();
                 if (image) embed.setImage(image.url);
-
-                const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`rename_user:${name}`).setLabel(`تغيير الاسم إلى ${name}`).setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId('reset_name').setLabel('إرجاع الاسم الأصلي').setStyle(ButtonStyle.Secondary)
-                );
-                await interaction.channel.send({ embeds: [embed], components: [row] });
-                return interaction.reply({ content: 'تم إرسال اللوحة!', ephemeral: true });
+                const button = new ButtonBuilder().setCustomId('self_nickname').setLabel('اضغط لتغيير اسمك').setStyle(ButtonStyle.Primary);
+                if (emoji) {
+                    try { button.setEmoji(/^\d+$/.test(emoji) ? { id: emoji } : emoji); }
+                    catch { return interaction.reply({ content: 'الإيموجي غير صالح؛ استخدم إيموجي Unicode أو ID إيموجي متاح للبوت.', ephemeral: true }); }
+                }
+                const payload = { embeds: [embed], components: [new ActionRowBuilder().addComponents(button)], allowedMentions: { parse: [] } };
+                const prior = await NamePanelConfig.findOne({ guildId: interaction.guild.id });
+                let priorMessage = null;
+                if (prior?.channelId === channel.id) priorMessage = await channel.messages.fetch(prior.messageId).catch(() => null);
+                let panelMessage;
+                try { panelMessage = priorMessage ? await priorMessage.edit(payload) : await channel.send(payload); }
+                catch (error) { console.error('[Nickname Panel Publish Error]', error.message); return interaction.reply({ content: 'تعذر نشر اللوحة؛ راجع صلاحيات البوت.', ephemeral: true }); }
+                await NamePanelConfig.findOneAndUpdate({ guildId: interaction.guild.id }, { $set: { channelId: channel.id, messageId: panelMessage.id } }, { upsert: true, new: true });
+                if (prior && prior.channelId !== channel.id) {
+                    const oldChannel = interaction.guild.channels.cache.get(prior.channelId);
+                    if (oldChannel?.isTextBased?.()) await oldChannel.messages.delete(prior.messageId).catch(() => {});
+                }
+                return interaction.reply({ content: `تم نشر/تحديث لوحة تغيير الاسم في ${channel}.`, ephemeral: true });
             }
 
             // ===== أوامر الإشراف =====
@@ -3560,18 +3581,25 @@ client.on('interactionCreate', async (interaction) => {
             if (!emoji) return reply('الإيموجي غير موجود في السيرفر.', true); return reply(`**${emoji.name}**\nID: ${emoji.id}\nمتحرك: ${emoji.animated ? 'نعم' : 'لا'}\nالاستخدام: ${emoji}`);
         }
 
-        // --- [ Rename Buttons ] ---
-        if (interaction.isButton() && interaction.customId.startsWith('rename_user:')) {
-            const newName = interaction.customId.split(':')[1];
-            const setResult = await interaction.member.setNickname(newName).catch(() => null);
-            if (!setResult) return interaction.reply({ content: 'ما بقدر أغير الاسم (تأكد من صلاحياتي)', ephemeral: true });
-            return interaction.reply({ content: `تم تغيير اسمك إلى: ${newName}`, ephemeral: true });
+        // --- [ Self Nickname Modal ] ---
+        if (interaction.isButton() && interaction.customId === 'self_nickname') {
+            const modal = new ModalBuilder().setCustomId('self_nickname_modal').setTitle('تغيير اسمك في السيرفر');
+            modal.addComponents(new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('nickname_value').setLabel('الاسم الجديد (1 إلى 32 حرفًا)').setStyle(TextInputStyle.Short).setMinLength(1).setMaxLength(32).setRequired(true).setValue(String(interaction.member.nickname || interaction.user.globalName || interaction.user.username).slice(0,32))
+            ));
+            return interaction.showModal(modal);
         }
 
-        if (interaction.isButton() && interaction.customId === 'reset_name') {
-            const setResult = await interaction.member.setNickname(null).catch(() => null);
-            if (!setResult) return interaction.reply({ content: 'ما بقدر أرجع الاسم', ephemeral: true });
-            return interaction.reply({ content: 'تم ارجاع اسمك الأصلي', ephemeral: true });
+        if (interaction.isModalSubmit() && interaction.customId === 'self_nickname_modal') {
+            const newName = String(interaction.fields.getTextInputValue('nickname_value') || '').trim();
+            if (newName.length < 1 || newName.length > 32) return interaction.reply({ content: 'الاسم لازم يكون بين حرف واحد و32 حرفًا.', ephemeral: true });
+            const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+            if (!member) return interaction.reply({ content: 'تعذر العثور على عضويتك في السيرفر.', ephemeral: true });
+            if (!interaction.guild.members.me?.permissions.has(PermissionFlagsBits.ManageNicknames)) return interaction.reply({ content: 'البوت يحتاج صلاحية Manage Nicknames لتغيير اسمك.', ephemeral: true });
+            if (!member.manageable) return interaction.reply({ content: 'رتبة البوت لا تسمح بتغيير اسمك؛ على الإدارة رفع رتبة البوت فوق رتبتك.', ephemeral: true });
+            try { await member.setNickname(newName, `طلب تغيير اسم ذاتي عبر لوحة Drayz بواسطة ${interaction.user.tag}`); }
+            catch (error) { console.error('[Self Nickname Error]', error.message); return interaction.reply({ content: 'تعذر تغيير الاسم. تحقق من صلاحيات البوت وترتيب الرتب.', ephemeral: true }); }
+            return interaction.reply({ content: `تم تغيير اسمك داخل السيرفر إلى **${newName}**.`, ephemeral: true });
         }
 
         // --- [ Ticket Rating Buttons ] ---
@@ -3606,7 +3634,7 @@ client.on('interactionCreate', async (interaction) => {
             if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
             const tConfig = await TicketConfig.findOne({ guildId: interaction.guild.id });
             const isAdmin = Boolean((ticketData.adminRole && interaction.member.roles.cache.has(ticketData.adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) || interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild));
-            if (!isAdmin && ticketData.ownerId !== interaction.user.id) return interaction.reply({ content: 'هذا الزر متاح لصاحب التكت أو الإدارة فقط.', ephemeral: true });
+            if (!isAdmin) return interaction.reply({ content: 'زر الإغلاق بدون تقييم مخصص للإدارة فقط.', ephemeral: true });
             if (!ticketData.closedAt) return interaction.reply({ content: 'أغلق التكت أولًا من قائمة التحكم.', ephemeral: true });
             if (ticketData.rating != null) return interaction.reply({ content: 'تم إرسال تقييم لهذه التذكرة بالفعل.', ephemeral: true });
             if (ticketData.ratingSkipped) return interaction.reply({ content: 'تم اختيار الإغلاق بدون تقييم مسبقًا.', ephemeral: true });
@@ -3658,7 +3686,7 @@ client.on('interactionCreate', async (interaction) => {
                     new ButtonBuilder().setCustomId(`ticket_close_skip:${ticketData._id}`).setLabel('إغلاق بدون تقييم').setStyle(ButtonStyle.Danger)
                 );
                 try {
-                    await interaction.channel.send({ content: `<@${ticketData.ownerId}>`, embeds: [new EmbedBuilder().setColor(0x718bff).setTitle('كيف كانت تجربتك؟').setDescription('اختر تقييمك من الأزرار أدناه. بعد إرسال التقييم ستُحذف قناة التذكرة خلال **5 ثوانٍ**. إذا لا ترغب بالتقييم استخدم زر **إغلاق بدون تقييم**.').addFields({ name: 'التذكرة', value: `#${ticketData.ticketCount || '—'} · ${String(ticketData.ticketType || 'دعم').slice(0, 80)}`, inline: true }, { name: 'أغلقها', value: `<@${interaction.user.id}>`, inline: true }).setTimestamp()], components: [ratingRow, closeRow], allowedMentions: { users: [ticketData.ownerId] } });
+                    await interaction.channel.send({ content: `<@${ticketData.ownerId}>`, embeds: [new EmbedBuilder().setColor(0x718bff).setTitle('كيف كانت تجربتك؟').setDescription('اختر تقييمك من الأزرار أدناه. بعد إرسال التقييم ستُحذف قناة التذكرة خلال **5 ثوانٍ**.').addFields({ name: 'التذكرة', value: `#${ticketData.ticketCount || '—'} · ${String(ticketData.ticketType || 'دعم').slice(0, 80)}`, inline: true }, { name: 'أغلقها', value: `<@${interaction.user.id}>`, inline: true }).setTimestamp()], components: [ratingRow, closeRow], allowedMentions: { users: [ticketData.ownerId] } });
                 } catch (error) {
                     console.error('[Ticket Rating Prompt Error]', error.message);
                     ticketData.closedAt = null;
@@ -4168,10 +4196,12 @@ async function registerSlashCommands() {
             .addAttachmentOption(opt => opt.setName('image').setDescription('صورة البنر').setRequired(true)),
         new SlashCommandBuilder()
             .setName('rename_panel')
-            .setDescription('إرسال لوحة تغيير الاسم')
+            .setDescription('نشر لوحة تغيير الاسم الذاتي للأعضاء')
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-            .addStringOption(opt => opt.setName('name').setDescription('الاسم الجديد').setRequired(true))
-            .addAttachmentOption(opt => opt.setName('image').setDescription('صورة اللوحة').setRequired(false)),
+            .addChannelOption(opt => opt.setName('channel').setDescription('الروم الذي ستُنشر فيه اللوحة').addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setRequired(true))
+            .addStringOption(opt => opt.setName('description').setDescription('وصف لوحة تغيير الاسم').setMaxLength(4000).setRequired(true))
+            .addStringOption(opt => opt.setName('emoji').setDescription('إيموجي Unicode أو ID للإيموجي المخصص').setMaxLength(100).setRequired(false))
+            .addAttachmentOption(opt => opt.setName('image').setDescription('صورة اللوحة (اختياري)').setRequired(false)),
 
         // ===== 20 أمر إشراف قوية =====
         new SlashCommandBuilder().setName('ban').setDescription('حظر عضو من السيرفر')
